@@ -120,7 +120,7 @@ You'll see live progress %, completion, and the full log of LMS API calls (0 err
 ```bash
 npm install
 npm run build     # tsc -> dist/
-npm test          # 49 checks: converter + runtime + mcp + schema (xmllint required)
+npm test          # 102 checks: converter + runtime + mcp + schema + security + v2 (xmllint required)
 
 # bonus: validate against a strict independent SCORM 2004 runtime
 npm i -D scorm-again && node test/scorm-again.test.mjs
