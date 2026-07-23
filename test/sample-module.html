@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Le N°5 — Histoire & Service</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" />
+  <style>
+    :root { --ink:#111; --paper:#faf8f5; }
+    * { margin:0; box-sizing:border-box; }
+    body { font-family:'Inter',system-ui,sans-serif; color:var(--ink); background:var(--paper); line-height:1.6; }
+    section { min-height:90vh; padding:8vw 6vw; display:flex; flex-direction:column; justify-content:center; }
+    h1 { font-size:clamp(28px,7vw,56px); font-weight:600; letter-spacing:-0.02em; }
+    h2 { font-size:clamp(22px,5vw,34px); font-weight:600; margin-bottom:1rem; }
+    p { max-width:60ch; margin-bottom:1rem; }
+    img { width:100%; border-radius:14px; margin:1.5rem 0; }
+    button { font:inherit; font-weight:600; padding:14px 22px; border:none; border-radius:999px; background:var(--ink); color:#fff; }
+    video { width:100%; border-radius:14px; }
+  </style>
+</head>
+<body>
+
+  <section data-jalon="intro" data-trigger="view">
+    <h1>Le N°5</h1>
+    <p>Module de formation Retail — savoir-faire et argumentaire en boutique.</p>
+    <img src="https://picsum.photos/seed/no5/720/420" alt="Illustration" />
+  </section>
+
+  <section data-jalon="histoire-produit" data-trigger="view">
+    <h2>L'histoire du produit</h2>
+    <p>Créé en 1921, le parfum repose sur un bouquet d'aldéhydes qui en a fait une signature olfactive unique. Le conseiller doit savoir raconter cette histoire avec justesse.</p>
+  </section>
+
+  <section data-jalon="geste-savoir-faire" data-trigger="view">
+    <h2>Le geste</h2>
+    <p>Regardez la démonstration du geste de présentation jusqu'au bout.</p>
+    <video controls data-jalon="video-vue" data-trigger="ended" poster="https://picsum.photos/seed/poster/720/420">
+      <source src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4" type="video/mp4" />
+    </video>
+  </section>
+
+  <section data-jalon="argumentaire" data-trigger="click" style="cursor:pointer;">
+    <h2>L'argumentaire</h2>
+    <p>Lisez l'argumentaire de vente, puis confirmez.</p>
+    <button>J'ai lu l'argumentaire</button>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+  <script>
+    // trivial author script that uses the CDN lib — proves inlined JS still runs
+    window.addEventListener('load', function () {
+      if (window.confetti) { /* available offline after inlining */ }
+    });
+  </script>
+
+</body>
+</html>

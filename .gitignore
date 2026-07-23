@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# generated SCORM packages
+scorm-packages/
+test/*.zip
+*.mcpb
+
+# ad-hoc local generators (not part of the project)
+test/make-*.mjs
+test/_*.mjs
+
+# os / logs
+.DS_Store
+*.log
+npm-debug.log*

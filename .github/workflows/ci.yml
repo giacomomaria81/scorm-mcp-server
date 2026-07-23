@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install xmllint (schema conformance test)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
+      - run: npm ci
+      - run: npm test
+      - name: Bonus — strict runtime validation (scorm-again)
+        run: |
+          npm i -D scorm-again --no-audit --no-fund
+          node test/scorm-again.test.mjs

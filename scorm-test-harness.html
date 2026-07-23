@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banc d'essai SCORM 2004 — lecteur local</title>
+<!-- scorm-again : runtime SCORM 2004 strict (joue l'API du LMS). JSZip : décompresse le paquet. -->
+<script src="vendor/scorm2004.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script>
+  // Fallback CDN si les copies vendorées manquent (harness copié seul, hors repo).
+  if (!(window.Scorm2004API || (window.ScormAgain && window.ScormAgain.Scorm2004API))) {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/scorm-again@3.0.5/dist/scorm2004.min.js"><\/script>');
+  }
+  if (!window.JSZip) {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"><\/script>');
+  }
+</script>
+<style>
+  :root{
+    --ink:#1a1a1a; --muted:#6b6b6b; --line:#e6e3dd; --paper:#faf8f4; --card:#fff;
+    --accent:#c2410c; --ok:#15803d; --warn:#b45309; --err:#b91c1c;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
+  header{padding:28px 32px 18px;border-bottom:1px solid var(--line)}
+  h1{font-size:18px;font-weight:600;letter-spacing:-.01em;margin:0}
+  .sub{color:var(--muted);font-size:13px;margin-top:4px;max-width:64ch}
+  .wrap{display:grid;grid-template-columns:1fr 1fr;gap:0;min-height:calc(100vh - 92px)}
+  @media(max-width:880px){.wrap{grid-template-columns:1fr}}
+  .left{border-right:1px solid var(--line);display:flex;flex-direction:column}
+  @media(max-width:880px){.left{border-right:none;border-bottom:1px solid var(--line)}}
+  .pane-h{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:14px 20px 0}
+  .drop{margin:16px 20px;border:1.5px dashed var(--line);border-radius:12px;padding:26px;text-align:center;cursor:pointer;transition:.15s;background:var(--card)}
+  .drop:hover,.drop.over{border-color:var(--accent);background:#fff}
+  .drop strong{color:var(--accent)}
+  .drop small{display:block;color:var(--muted);margin-top:6px;font-size:12px}
+  #frameWrap{flex:1;margin:0 20px 20px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff;min-height:340px;display:flex}
+  iframe{border:0;width:100%;height:100%;background:#fff}
+  .empty{margin:auto;color:var(--muted);font-size:13px;text-align:center;padding:40px}
+  .right{display:flex;flex-direction:column;background:var(--paper)}
+  .metrics{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+  .metric{background:var(--card);padding:16px 20px}
+  .metric .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  .metric .v{font-size:22px;font-weight:650;letter-spacing:-.02em;margin-top:3px;font-variant-numeric:tabular-nums}
+  .metric .v small{font-size:13px;font-weight:500;color:var(--muted)}
+  .bar{height:6px;background:var(--line);border-radius:999px;overflow:hidden;margin-top:10px}
+  .bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:999px;transition:width .35s cubic-bezier(.2,.7,.2,1)}
+  .pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;background:#eee;color:var(--muted)}
+  .pill.ok{background:#e7f3ec;color:var(--ok)} .pill.run{background:#fdf0e7;color:var(--accent)} .pill.err{background:#fbeaea;color:var(--err)}
+  .controls{display:flex;gap:8px;padding:14px 20px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+  button{font:inherit;font-size:13px;font-weight:550;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--ink)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .logh{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:14px 20px 6px;display:flex;justify-content:space-between}
+  #log{flex:1;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.65;padding:0 20px 20px;margin:0}
+  .row{display:flex;gap:10px;padding:3px 0;border-bottom:1px solid #f1efe9;white-space:nowrap}
+  .row .t{color:#b9b4ab;flex:none;width:74px}
+  .row .fn{font-weight:600;flex:none;width:92px}
+  .row .fn.Initialize,.row .fn.Commit{color:var(--accent)} .row .fn.Terminate{color:var(--err)} .row .fn.SetValue{color:var(--ink)}
+  .row .d{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+  .row .d b{color:var(--ink);font-weight:600}
+  .err0{color:var(--err)!important}
+  footer{padding:10px 20px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
+  code{background:#efece6;padding:1px 5px;border-radius:5px;font-family:var(--mono);font-size:11.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Banc d'essai SCORM 2004 · lecteur local</h1>
+  <div class="sub">Charge un paquet <code>.zip</code> (ou son <code>index.html</code>). La page joue le rôle du LMS via une vraie API <code>API_1484_11</code> (scorm-again, validation stricte). Aucun compte, 100 % local.</div>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <div class="pane-h">Contenu</div>
+    <label class="drop" id="drop">
+      <strong>Déposer / choisir</strong> un paquet SCORM
+      <small>.zip généré par le MCP, ou un index.html</small>
+      <input id="file" type="file" accept=".zip,.html,.htm" hidden>
+    </label>
+    <div id="frameWrap"><div class="empty" id="empty">Le module s'affichera ici une fois chargé.</div></div>
+  </div>
+
+  <div class="right">
+    <div class="metrics">
+      <div class="metric">
+        <div class="k">Progression</div>
+        <div class="v"><span id="pct">0</span><small>%</small></div>
+        <div class="bar"><i id="barfill"></i></div>
+      </div>
+      <div class="metric">
+        <div class="k">Complétion</div>
+        <div class="v" style="font-size:16px;margin-top:8px"><span class="pill" id="status">—</span></div>
+      </div>
+      <div class="metric">
+        <div class="k">Temps de session</div>
+        <div class="v" style="font-size:16px" id="time">—</div>
+      </div>
+      <div class="metric">
+        <div class="k">Appels API · dernière erreur</div>
+        <div class="v" style="font-size:16px"><span id="calls">0</span> · <span id="lasterr">0</span></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="primary" id="reload" disabled>↻ Relancer (session neuve)</button>
+      <button id="resume" disabled>⏯ Reprendre (suspend_data)</button>
+      <button id="clear" disabled>Effacer le journal</button>
+    </div>
+
+    <div class="logh"><span>Journal des échanges LMS ↔ contenu</span><span id="suspendInfo"></span></div>
+    <div id="log"><div class="empty">En attente d'un module…</div></div>
+    <footer>Astuce : si rien ne s'affiche en double-cliquant le fichier, sers-le via <code>python3 -m http.server</code> puis ouvre l'URL — certains navigateurs bloquent <code>localStorage</code>/iframe en <code>file://</code>.</footer>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var ScormAPI = window.Scorm2004API || (window.ScormAgain && window.ScormAgain.Scorm2004API);
+  var indexHtml = null;          // current SCO HTML
+  var captured = {};             // last-seen cmi values (for resume)
+  var calls = 0;
+
+  var $ = function(id){ return document.getElementById(id); };
+  function pad(n){ return (n<10?"0":"")+n; }
+  function now(){ var d=new Date(); return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds()); }
+
+  function resetDash(){
+    calls=0; captured={};
+    $("pct").textContent="0"; $("barfill").style.width="0%";
+    $("status").textContent="—"; $("status").className="pill";
+    $("time").textContent="—"; $("calls").textContent="0";
+    $("lasterr").textContent="0"; $("lasterr").className="";
+    $("suspendInfo").textContent="";
+    $("log").innerHTML="";
+  }
+
+  function logRow(fn, detail, errCode){
+    var r=document.createElement("div"); r.className="row";
+    var bad = errCode && errCode!=="0";
+    r.innerHTML='<span class="t">'+now()+'</span><span class="fn '+fn+'">'+fn+'</span><span class="d">'+detail+'</span>';
+    if(bad){ r.querySelector(".d").classList.add("err0"); }
+    $("log").appendChild(r); $("log").scrollTop=$("log").scrollHeight;
+  }
+
+  function setMetric(el, val){
+    if(el==="cmi.progress_measure"){ var p=Math.round(parseFloat(val||0)*100); $("pct").textContent=p; $("barfill").style.width=p+"%"; }
+    if(el==="cmi.completion_status"){ var s=$("status"); s.textContent=val; s.className="pill "+(val==="completed"?"ok":"run"); }
+    if(el==="cmi.session_time"){ $("time").textContent=val; }
+  }
+
+  // Build an instrumented scorm-again API and put it on the HARNESS window,
+  // so the SCO (in a same-origin srcdoc iframe) finds window.parent.API_1484_11.
+  function mountAPI(startingCmi){
+    var api;
+    try{
+      api = new ScormAPI({ autocommit:true, enableOfflineSupport:false, logLevel:"ERROR" });
+    }catch(e){
+      try{ api = new ScormAPI({ autocommit:true, logLevel:"ERROR" }); }
+      catch(e2){ alert("Impossible d'initialiser scorm-again : "+(e2&&e2.message)); return null; }
+    }
+    if(startingCmi && typeof api.loadFromJSON==="function"){
+      try{ api.loadFromJSON(startingCmi); }catch(e){ /* best-effort resume */ }
+    }
+    ["Initialize","SetValue","Commit","Terminate"].forEach(function(fn){
+      if(typeof api[fn]!=="function") return;
+      var orig = api[fn].bind(api);
+      api[fn] = function(){
+        var rc = orig.apply(null, arguments);
+        calls++; $("calls").textContent=calls;
+        var err = (typeof api.GetLastError==="function") ? String(api.GetLastError()) : "0";
+        $("lasterr").textContent=err; $("lasterr").className = (err!=="0"?"err0":"");
+        if(fn==="SetValue"){
+          var k=arguments[0], v=String(arguments[1]);
+          captured[k]=v; setMetric(k,v);
+          var shown = v.length>60 ? v.slice(0,57)+"…" : v;
+          logRow("SetValue", "<b>"+k+"</b> = "+shown, err);
+          if(k==="cmi.suspend_data"){ $("suspendInfo").textContent="suspend_data : "+v.length+" car."; }
+        } else {
+          logRow(fn, fn==="Initialize"?"démarrage de la session":(fn==="Terminate"?"fin de session":"commit vers le LMS"), err);
+        }
+        return rc;
+      };
+    });
+    window.API_1484_11 = api;
+    return api;
+  }
+
+  function render(startingCmi){
+    if(!indexHtml) return;
+    if(!ScormAPI){ alert("scorm-again n'a pas pu être chargé depuis le CDN (connexion ?)."); return; }
+    resetDash();
+    mountAPI(startingCmi);
+    var wrap=$("frameWrap"); wrap.innerHTML="";
+    var f=document.createElement("iframe");
+    f.setAttribute("title","SCO");
+    wrap.appendChild(f);
+    // srcdoc => same-origin as this page => the SCO can reach window.parent.API_1484_11
+    f.srcdoc = indexHtml;
+    $("reload").disabled=false; $("resume").disabled=false; $("clear").disabled=false;
+  }
+
+  async function loadFile(file){
+    try{
+      if(/\.(html?|htm)$/i.test(file.name)){
+        indexHtml = await file.text();
+      } else {
+        var buf = await file.arrayBuffer();
+        var zip = await JSZip.loadAsync(buf);
+        var entry = zip.file("index.html") || zip.file(Object.keys(zip.files).find(function(n){return /index\.html$/i.test(n);}));
+        if(!entry){ alert("Pas d'index.html trouvé dans le .zip."); return; }
+        indexHtml = await entry.async("string");
+      }
+      $("empty") && $("empty").remove();
+      render(null);
+    }catch(e){ alert("Lecture impossible : "+(e&&e.message)); }
+  }
+
+  // wiring
+  var drop=$("drop"), file=$("file");
+  file.addEventListener("change", function(e){ if(e.target.files[0]) loadFile(e.target.files[0]); });
+  ["dragenter","dragover"].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add("over");}); });
+  ["dragleave","drop"].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove("over");}); });
+  drop.addEventListener("drop", function(e){ var f=e.dataTransfer.files[0]; if(f) loadFile(f); });
+
+  $("reload").addEventListener("click", function(){ render(null); });
+  $("resume").addEventListener("click", function(){
+    // re-launch with the previously captured suspend/location/completion
+    var s={};
+    if(captured["cmi.suspend_data"]!=null) s.suspend_data=captured["cmi.suspend_data"];
+    if(captured["cmi.location"]!=null) s.location=captured["cmi.location"];
+    if(captured["cmi.completion_status"]!=null) s.completion_status=captured["cmi.completion_status"];
+    render(s);
+  });
+  $("clear").addEventListener("click", function(){ $("log").innerHTML=""; });
+
+  if(!ScormAPI){
+    document.getElementById("log").innerHTML='<div class="empty" style="color:var(--err)">scorm-again non chargé — vérifie ta connexion au CDN, puis recharge la page.</div>';
+  }
+})();
+</script>
+</body>
+</html>
