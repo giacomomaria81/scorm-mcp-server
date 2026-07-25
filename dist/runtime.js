@@ -18,12 +18,18 @@ export const SCORM_RUNTIME = `
 (function () {
   "use strict";
 
+  // Singleton: a double injection would double-Initialize, double the event
+  // listeners (duplicated score writes) and Terminate twice.
+  if (window.__SCORM_JALONS__) { return; }
+  window.__SCORM_JALONS__ = true;
+
   var SUSPEND_VERSION = 1;
+  var SUSPEND_MAX_CHARS = 64000; // SCORM 2004 SPM for cmi.suspend_data
   var MAX_FRAME_DEPTH = 500;
   var COMMIT_INTERVAL_MS = 5000;
 
   var api = null, initialized = false, terminated = false, previewMode = false, successOnComplete = false;
-  var masteryScore = null, lastScaled = null;
+  var masteryScore = null, lastScaled = null, lastScore = null;
   try { if (typeof window.__SCORM_MASTERY === "number" && window.__SCORM_MASTERY >= 0 && window.__SCORM_MASTERY <= 1) { masteryScore = window.__SCORM_MASTERY; } } catch (e) {}
   var milestoneIds = [], reached = {}, reachedCount = 0, lastProgress = 0, completed = false;
   var startTime = 0, commitTimer = null, lastCommit = 0;
@@ -52,16 +58,22 @@ export const SCORM_RUNTIME = `
 
   // ---- guarded API calls ---------------------------------------------------
   function get(el) {
-    if (!api || !initialized) { return ""; }
+    if (!api || !initialized || terminated) { return ""; }
     try { return api.GetValue(el); } catch (e) { log("GetValue error: " + el); return ""; }
   }
   function set(el, val) {
-    if (!api || !initialized) { return; }
-    try { api.SetValue(el, String(val)); } catch (e) { log("SetValue error: " + el); }
+    if (!api || !initialized || terminated) { return; }
+    try {
+      var ok = api.SetValue(el, String(val));
+      if (ok === "false" || ok === false) {
+        var ec = ""; try { ec = String(api.GetLastError()); } catch (e2) {}
+        log("SetValue refused: " + el + " (LMS error " + ec + ")");
+      }
+    } catch (e) { log("SetValue error: " + el); }
   }
   function doCommit() {
     lastCommit = (new Date()).getTime();
-    if (!api || !initialized) { return; }
+    if (!api || !initialized || terminated) { return; }
     try { api.Commit(""); } catch (e) { log("Commit error"); }
   }
   function scheduleCommit() {
@@ -85,7 +97,12 @@ export const SCORM_RUNTIME = `
   }
   function pushProgress() {
     var total = milestoneIds.length;
-    var p = total > 0 ? (reachedCount / total) : 1;
+    // total 0 must NOT mean "100%": a SPA that declares its milestones after
+    // load would be marked completed at open, and lastProgress=1 would freeze
+    // all real reporting forever. No milestone model (yet) = report nothing;
+    // endSession() handles the "no milestones at all" case as visited-on-exit.
+    if (total === 0) { return; }
+    var p = reachedCount / total;
     if (p < lastProgress) { p = lastProgress; }
     lastProgress = p;
     set("cmi.progress_measure", formatMeasure(p));
@@ -93,8 +110,19 @@ export const SCORM_RUNTIME = `
   }
   function markCompleted() { completed = true; set("cmi.completion_status", "completed"); if (successOnComplete) { set("cmi.success_status", "passed"); } log("module completed"); }
 
+  function suspendJson() {
+    var ids = keysOf(reached);
+    var json = JSON.stringify({ v: SUSPEND_VERSION, reached: ids });
+    // Above the SPM the LMS rejects the whole SetValue (silently for us): better
+    // to persist a truncated resume list than to lose resume entirely.
+    while (json.length > SUSPEND_MAX_CHARS && ids.length > 0) {
+      ids.pop();
+      json = JSON.stringify({ v: SUSPEND_VERSION, reached: ids });
+    }
+    return json;
+  }
   function persist() {
-    set("cmi.suspend_data", JSON.stringify({ v: SUSPEND_VERSION, reached: keysOf(reached) }));
+    set("cmi.suspend_data", suspendJson());
     var y = window.pageYOffset || (document.documentElement && document.documentElement.scrollTop) || 0;
     set("cmi.location", String(y));
     set("cmi.exit", "suspend");
@@ -105,12 +133,13 @@ export const SCORM_RUNTIME = `
   function fmtScaled(x) { if (x >= 1) { return "1"; } if (x <= 0) { return "0"; } return String(Math.round(x * 10000) / 10000); }
   function reportScore(raw, min, max) {
     raw = Number(raw);
-    if (isNaN(raw)) { return; }
-    min = Number(min); if (isNaN(min)) { min = 0; }
-    max = Number(max); if (isNaN(max) || !(max > min)) { max = min + 100; }
+    if (!isFinite(raw)) { return; } // NaN AND Infinity (score.raw is real(10,7))
+    min = Number(min); if (!isFinite(min)) { min = 0; }
+    max = Number(max); if (!isFinite(max) || !(max > min)) { max = min + 100; }
     var scaled = (raw - min) / (max - min);
     if (scaled < 0) { scaled = 0; } if (scaled > 1) { scaled = 1; }
     lastScaled = scaled;
+    lastScore = { raw: raw, min: min, max: max }; // kept for replay after Initialize
     set("cmi.score.raw", String(raw));
     set("cmi.score.min", String(min));
     set("cmi.score.max", String(max));
@@ -164,26 +193,51 @@ export const SCORM_RUNTIME = `
       if (se) { var sv = (se.getAttribute("data-scorm-success") || "").toLowerCase(); successOnComplete = (sv === "" || sv === "on-completion" || sv === "true"); }
     } catch (e) {}
     var nodes = document.querySelectorAll("[data-jalon]"), seen = {}, i, id;
+    // seed with already-known ids so a re-collect (bfcache resume, dynamic DOM)
+    // never duplicates entries and inflates the total
+    for (i = 0; i < milestoneIds.length; i++) { seen[milestoneIds[i]] = true; }
     for (i = 0; i < nodes.length; i++) { id = nodes[i].getAttribute("data-jalon"); if (id && !seen[id]) { seen[id] = true; milestoneIds.push(id); } }
   }
+  var io = null;
+  function ensureObserver() {
+    if (io || !window.IntersectionObserver) { return; }
+    // A fixed threshold of 0.5 can NEVER fire for an element taller than twice
+    // the viewport (its intersection ratio is capped below 0.5), leaving the
+    // module incomplete forever. Instead: threshold 0 + a rootMargin band around
+    // the middle of the viewport — "reached" when the element crosses the zone
+    // the reader is actually looking at, whatever its size.
+    io = new IntersectionObserver(function (entries) {
+      var k; for (k = 0; k < entries.length; k++) {
+        if (entries[k].isIntersecting) { var id = entries[k].target.getAttribute("data-jalon"); io.unobserve(entries[k].target); reach(id); }
+      }
+    }, { rootMargin: "-35% 0px -35% 0px", threshold: 0 });
+  }
+  function wireNode(node) {
+    if (node.__scormWired) { return; }
+    node.__scormWired = true;
+    var id = node.getAttribute("data-jalon");
+    var trig = (node.getAttribute("data-trigger") || "view").toLowerCase();
+    if (trig === "click") { node.addEventListener("click", function () { reach(id); }, { once: true }); }
+    else if (trig === "ended") { node.addEventListener("ended", function () { reach(id); }, { once: true }); }
+    else { ensureObserver(); if (io) { io.observe(node); } else { reach(id); } }
+  }
   function wireTriggers() {
-    var nodes = document.querySelectorAll("[data-jalon]"), io = null, j;
-    if (window.IntersectionObserver) {
-      io = new IntersectionObserver(function (entries) {
-        var k; for (k = 0; k < entries.length; k++) {
-          if (entries[k].isIntersecting) { var id = entries[k].target.getAttribute("data-jalon"); io.unobserve(entries[k].target); reach(id); }
-        }
-      }, { threshold: 0.5 });
-    }
-    for (j = 0; j < nodes.length; j++) {
-      (function (node) {
-        var id = node.getAttribute("data-jalon");
-        var trig = (node.getAttribute("data-trigger") || "view").toLowerCase();
-        if (trig === "click") { node.addEventListener("click", function () { reach(id); }, { once: true }); }
-        else if (trig === "ended") { node.addEventListener("ended", function () { reach(id); }, { once: true }); }
-        else { if (io) { io.observe(node); } else { reach(id); } }
-      })(nodes[j]);
-    }
+    var nodes = document.querySelectorAll("[data-jalon]"), j;
+    for (j = 0; j < nodes.length; j++) { wireNode(nodes[j]); }
+  }
+  function watchDynamicMilestones() {
+    // SPAs inject their screens after load: without this, a data-jalon added
+    // later is neither counted nor wired — the feature silently dies.
+    if (!window.MutationObserver || !document.body) { return; }
+    try {
+      var mo = new MutationObserver(function () {
+        var before = milestoneIds.length;
+        collectMilestones();
+        wireTriggers();
+        if (milestoneIds.length !== before) { pushProgress(); }
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+    } catch (e) {}
   }
 
   // ---- resume --------------------------------------------------------------
@@ -192,7 +246,10 @@ export const SCORM_RUNTIME = `
     if (raw) {
       try {
         var d = JSON.parse(raw);
-        if (d && d.reached && d.reached.length) {
+        // d.reached MUST be an array: a string would pass a bare .length check
+        // and be iterated character by character, creating one ghost milestone
+        // per letter and making 100% unreachable.
+        if (d && d.reached && Object.prototype.toString.call(d.reached) === "[object Array]" && d.reached.length) {
           for (i = 0; i < d.reached.length; i++) {
             var id = d.reached[i];
             var known = false, j;
@@ -212,29 +269,46 @@ export const SCORM_RUNTIME = `
   // ---- lifecycle -----------------------------------------------------------
   function startSession() {
     api = locateAPI();
-    if (!api) { previewMode = true; log("no LMS API found - preview mode (no tracking)"); collectMilestones(); return; }
+    if (!api) { previewMode = true; log("no LMS API found - preview mode (no tracking)"); collectMilestones(); wireTriggers(); watchDynamicMilestones(); return; }
     var res; try { res = api.Initialize(""); } catch (e) { res = "false"; }
     initialized = (res === "true" || res === true);
     if (!initialized) { var err = ""; try { err = String(api.GetLastError()); } catch (e2) {} if (err === "103") { initialized = true; } }
-    if (!initialized) { previewMode = true; log("Initialize failed - preview mode (no tracking)"); collectMilestones(); return; }
+    if (!initialized) { previewMode = true; log("Initialize failed - preview mode (no tracking)"); collectMilestones(); wireTriggers(); watchDynamicMilestones(); return; }
     startTime = (new Date()).getTime();
     if (get("cmi.completion_status") !== "completed") { set("cmi.completion_status", "incomplete"); }
     collectMilestones();
     restore();
+    // Replay state accumulated BEFORE Initialize: events fired by the content at
+    // load time were memorised, but their SetValue calls were dropped (no API
+    // yet). Without this, an early scorm:complete or scorm:score is lost forever.
+    if (completed) { set("cmi.completion_status", "completed"); if (successOnComplete) { set("cmi.success_status", "passed"); } }
+    if (lastScore) { reportScore(lastScore.raw, lastScore.min, lastScore.max); }
+    if (lastProgress > 0) { set("cmi.progress_measure", formatMeasure(lastProgress)); }
     wireTriggers();
+    watchDynamicMilestones();
     doCommit();
   }
   function endSession() {
     if (previewMode || !initialized || terminated) { return; }
-    terminated = true;
     if (commitTimer) { window.clearTimeout(commitTimer); commitTimer = null; }
     var elapsed = startTime ? ((new Date()).getTime() - startTime) : 0;
     set("cmi.session_time", iso8601(elapsed));
-    set("cmi.suspend_data", JSON.stringify({ v: SUSPEND_VERSION, reached: keysOf(reached) }));
+    if (!completed && milestoneIds.length === 0) {
+      // No milestone model at all (content declared nothing): "visited" is the
+      // only signal available — report completed on exit rather than leaving
+      // the learner incomplete forever.
+      completed = true;
+      set("cmi.completion_status", "completed");
+      if (successOnComplete) { set("cmi.success_status", "passed"); }
+    }
+    set("cmi.suspend_data", suspendJson());
     var y = window.pageYOffset || (document.documentElement && document.documentElement.scrollTop) || 0;
     set("cmi.location", String(y));
     set("cmi.exit", completed ? "normal" : "suspend");
     doCommit();
+    // Flip the flag only after the final writes: set()/get() refuse to run once
+    // terminated (protects against post-bfcache writes on iOS/Safari).
+    terminated = true;
     try { api.Terminate(""); } catch (e) { log("Terminate error"); }
   }
 
@@ -259,6 +333,15 @@ export const SCORM_RUNTIME = `
   else { startSession(); }
   window.addEventListener("pagehide", endSession);
   window.addEventListener("beforeunload", endSession);
+  window.addEventListener("pageshow", function (ev) {
+    // iOS/Safari bfcache: pagehide fired endSession (Terminate), then the page
+    // comes back alive. Without a re-Initialize every later write is an LMS
+    // error 133. Start a fresh session against the API.
+    if (ev && ev.persisted && terminated) {
+      terminated = false; initialized = false; api = null;
+      startSession();
+    }
+  });
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "hidden" && !previewMode && initialized && !terminated) { persist(); }
   });

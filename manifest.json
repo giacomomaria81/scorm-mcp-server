@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "scorm-mcp-server",
   "display_name": "SCORM Packager (HTML → SCORM 2004)",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Convertit un HTML autonome OU un bundle Claude Design (.dc) en paquet SCORM 2004 prêt pour n'importe quel LMS : assets offline, suivi complétion/progression/score, schémas ADL embarqués.",
   "long_description": "Serveur MCP exposant un outil `scorm_package`. Principe : WRAP, don't rewrite — le HTML est conservé, on inline les assets en data-URI pour l'offline, on injecte un runtime SCORM 2004 (découverte d'API robuste, complétion/progression via jalons déclaratifs `data-jalon`/`data-trigger`, reprise via suspend_data), on génère le manifeste et on embarque les 15 XSD ADL. Validé sur un vrai LMS (SCORM Cloud) : import OK, completion=complete, success=passed, temps suivi.",
   "author": {

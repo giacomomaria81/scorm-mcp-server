@@ -7,7 +7,7 @@
 ![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)
 ![SCORM](https://img.shields.io/badge/SCORM-2004%204th%20Ed.-0a66c2)
 ![MCP](https://img.shields.io/badge/MCP-server-6E56CF)
-![Tests](https://img.shields.io/badge/tests-108%2F108%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-159%2F159%20passing-brightgreen)
 ![Validated](https://img.shields.io/badge/SCORM%20Cloud-validated-success)
 
 ![SCORM test harness demo](./assets/demo.gif)
@@ -26,7 +26,7 @@ An **MCP server** exposing a single tool, **`scorm_package`**, that converts a f
 
 ## ✅ Status — validated on a real LMS
 
-- **108/108 automated checks** green: 23 converter · 15 runtime · 12 MCP · 1 schema conformance (`xmllint`) · 6 security · 11 features · 13 auto-milestones · 21 V2 (bundle / `.dc` / score) — plus 6 bonus strict-runtime checks (`scorm-again`).
+- **159/159 automated checks** green: 23 converter · 15 runtime · 12 MCP · 1 schema conformance (`xmllint`) · 6 security · 11 features · 13 auto-milestones · 21 V2 (bundle / `.dc` / score) · 10 output-dir · 9 tracking-signal · 32 hardening (2.0.1 audit) — plus 6 bonus strict-runtime checks (`scorm-again`).
 - **SCORM Cloud (real LMS):** imports cleanly (recognized as *SCORM 2004 4th Ed.*, "manifest looks great"), and the dashboard reports **completion = complete, success = passed, time tracked**.
 
 ## Input formats

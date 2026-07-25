@@ -15,12 +15,13 @@
  */
 import * as cheerio from "cheerio";
 import JSZip from "jszip";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { SCORM_RUNTIME } from "./runtime.js";
 const MAX_ASSET_BYTES = 5 * 1024 * 1024; // per-asset warning threshold
+const HARD_ASSET_CAP_BYTES = 100 * 1024 * 1024; // refuse to base64 anything bigger
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024; // package size warning threshold
 const FETCH_TIMEOUT_MS = 20000;
 const FETCH_CONCURRENCY = 6;
@@ -38,7 +39,19 @@ function slugify(input) {
         .slice(0, 60) || "module");
 }
 function escapeXml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+    // C0 control characters are forbidden in XML 1.0 even when escaped; they slip
+    // into titles via copy-paste and would make the manifest non-well-formed.
+    return s
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+/**
+ * Percent-encode a bundle-relative path for use in a manifest href.
+ * encodeURI() is NOT enough: it leaves `#` and `?` intact, so a legal filename
+ * like "FAQ #1.html" would become an URI with a fragment and 404 in the player.
+ */
+function encodeHref(f) {
+    return f.split("/").map(encodeURIComponent).join("/");
 }
 function mimeFromExt(ref) {
     const ext = ref.split("?")[0].split("#")[0].split(".").pop()?.toLowerCase() || "";
@@ -85,7 +98,7 @@ function resolveRef(ref, baseUrl, baseDir, warnings) {
             }
             return { kind: "skip" };
         }
-        return { kind: "file", file, key: "f:" + file };
+        return { kind: "file", file, key: "f:" + file, root };
     }
     return { kind: "skip" };
 }
@@ -106,6 +119,9 @@ async function mapLimit(items, limit, fn) {
     await Promise.all(workers);
     return out;
 }
+// Trusted content-type prefixes; anything else from a server is likely a soft-404
+// error page (CDNs love serving text/html with a 200) — fall back to the extension.
+const CT_TRUSTED_RE = /^(image|font|audio|video|text|application)\//;
 // low-level fetch with timeout + one retry
 async function fetchBuffer(resolved) {
     if (resolved.kind === "skip") {
@@ -113,7 +129,15 @@ async function fetchBuffer(resolved) {
     }
     if (resolved.kind === "file") {
         try {
-            const data = await fs.readFile(resolved.file);
+            // The lexical containment check in resolveRef() can be defeated by a
+            // symlink INSIDE the module folder pointing outside it. Re-check on the
+            // resolved (real) path before reading.
+            const real = await fs.realpath(resolved.file);
+            const realRoot = await fs.realpath(resolved.root);
+            if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+                return null;
+            }
+            const data = await fs.readFile(real);
             return { data, contentType: mimeFromExt(resolved.file) };
         }
         catch {
@@ -121,16 +145,24 @@ async function fetchBuffer(resolved) {
         }
     }
     for (let attempt = 0; attempt < 2; attempt++) {
+        const ctrl = new AbortController();
+        // The timeout must cover the BODY too: clearing it right after the headers
+        // means a server that trickles the body one byte a minute hangs the whole
+        // packaging call forever. Keep the timer alive until arrayBuffer() settles.
+        const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
         try {
-            const ctrl = new AbortController();
-            const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
             const res = await fetch(resolved.url, { signal: ctrl.signal, redirect: "follow" });
-            clearTimeout(t);
             if (!res.ok) {
                 return null;
             }
             const data = Buffer.from(await res.arrayBuffer());
-            const ct = res.headers.get("content-type")?.split(";")[0].trim() || mimeFromExt(resolved.url);
+            const headerCt = res.headers.get("content-type")?.split(";")[0].trim() || "";
+            const extCt = mimeFromExt(resolved.url);
+            // An asset URL ending in .png served as text/html is an error page, not the
+            // asset; trust the extension over a suspicious header.
+            const ct = CT_TRUSTED_RE.test(headerCt) && !(headerCt === "text/html" && extCt !== "application/octet-stream" && !/\.html?$/i.test(resolved.url.split(/[?#]/)[0]))
+                ? headerCt
+                : extCt;
             return { data, contentType: ct };
         }
         catch {
@@ -138,6 +170,9 @@ async function fetchBuffer(resolved) {
                 return null;
             }
             await new Promise((r) => setTimeout(r, 250));
+        }
+        finally {
+            clearTimeout(t);
         }
     }
     return null;
@@ -152,6 +187,13 @@ async function dataUriFor(resolved, ctx) {
     }
     const asset = await fetchBuffer(resolved);
     if (!asset) {
+        ctx.cache.set(resolved.key, null);
+        return null;
+    }
+    if (asset.data.length > HARD_ASSET_CAP_BYTES) {
+        // base64-encoding a ~400 MB buffer throws ERR_STRING_TOO_LONG and kills the
+        // whole build with an obscure message; refuse early with a clear warning.
+        ctx.warnings.push("Asset ignoré (" + Math.round(asset.data.length / 1024 / 1024) + " Mo > plafond " + Math.round(HARD_ASSET_CAP_BYTES / 1024 / 1024) + " Mo): " + refLabel(resolved));
         ctx.cache.set(resolved.key, null);
         return null;
     }
@@ -232,7 +274,9 @@ async function processCss(css, baseUrl, baseDir, ctx, depth, visited) {
                 childBaseUrl = undefined;
             }
             const imported = await processCss(importedRaw, childBaseUrl, childBaseDir, ctx, depth + 1, visited);
-            css = css.replace(imp.full, imported);
+            // Replacement via callback: a plain string here would have its `$&`/`$'`
+            // patterns interpreted by String.replace, silently corrupting the CSS.
+            css = css.replace(imp.full, () => imported);
         }
     }
     // 2. inline url()
@@ -465,11 +509,17 @@ function injectRuntime(html, language, successOnCompletion, masteryScore) {
     });
     const masteryTag = typeof masteryScore === "number" ? '<script id="scorm-mastery">window.__SCORM_MASTERY=' + masteryScore + "</script>" : "";
     const tag = masteryTag + '<script id="scorm-jalons-runtime">' + SCORM_RUNTIME + "</script>";
-    if ($("body").length) {
-        $("body").append(tag);
+    // The runtime MUST be evaluated before any content script: a module that emits
+    // scorm:score / scorm:complete at load time would otherwise speak before the
+    // listeners even exist (appending to <body> put us after the content).
+    if ($("head").length) {
+        $("head").append(tag);
+    }
+    else if ($("body").length) {
+        $("body").prepend(tag);
     }
     else {
-        $.root().append(tag);
+        $.root().prepend(tag);
     }
     return { html: $.html(), milestoneIds: ids };
 }
@@ -499,7 +549,7 @@ function buildManifest(identifier, title, _language, entryHref = "index.html", e
         </imsss:sequencing>`
         : "";
     const fileLines = [entryHref, ...extraFiles]
-        .map((f) => `      <file href="${escapeXml(encodeURI(f))}"/>`)
+        .map((f) => `      <file href="${escapeXml(encodeHref(f))}"/>`)
         .join("\n");
     return `<?xml version="1.0" encoding="UTF-8"?>
 <manifest identifier="${id}" version="1.0"
@@ -520,7 +570,7 @@ function buildManifest(identifier, title, _language, entryHref = "index.html", e
     </organization>
   </organizations>
   <resources>
-    <resource identifier="RES-1" type="webcontent" adlcp:scormType="sco" href="${escapeXml(encodeURI(entryHref))}">
+    <resource identifier="RES-1" type="webcontent" adlcp:scormType="sco" href="${escapeXml(encodeHref(entryHref))}">
 ${fileLines}
     </resource>
   </resources>
@@ -531,6 +581,30 @@ ${fileLines}
 // ADL XSD schema bundling (offline conformance: xsi:schemaLocation resolves
 // to these sibling files inside the package)
 // --------------------------------------------------------------------------
+/**
+ * Does the content declare ANY way for the LMS to learn about progress?
+ * Either declarative milestones, or a call into the injected runtime, or one of
+ * the accepted CustomEvents. Scans the entry HTML, support.js and every other
+ * script/markup file in the bundle (trees are small: a handful of files).
+ */
+const TRACKING_SIGNAL_RE = /data-jalon|data-scorm-success|SCORM2004\s*\.\s*(reach|declare|score)|["'](?:scorm|dc):(?:progress|complete|score)["']/;
+export function hasTrackingSignal(bundle, entryHtml, supportJs) {
+    if (TRACKING_SIGNAL_RE.test(entryHtml) || TRACKING_SIGNAL_RE.test(supportJs)) {
+        return true;
+    }
+    for (const rel of bundle.files) {
+        if (!/\.(html?|js|mjs|jsx|ts|tsx)$/i.test(rel)) {
+            continue;
+        }
+        try {
+            if (TRACKING_SIGNAL_RE.test(readFileSync(path.join(bundle.root, rel), "utf8"))) {
+                return true;
+            }
+        }
+        catch { /* unreadable file: cannot prove a signal, keep looking */ }
+    }
+    return false;
+}
 const SCHEMA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../schemas");
 async function bundleSchemas(zip, ctx) {
     let entries;
@@ -628,8 +702,16 @@ async function loadBundle(inputPath) {
         await fs.mkdir(path.dirname(dest), { recursive: true });
         await fs.writeFile(dest, await entry.async("nodebuffer"));
     }
-    const files = await walkDir(root);
-    return { root, files, entryRel: pickEntry(files), cleanup: true };
+    try {
+        const files = await walkDir(root);
+        return { root, files, entryRel: pickEntry(files), cleanup: true };
+    }
+    catch (e) {
+        // pickEntry throws on a zip with no HTML entry; without this cleanup the
+        // extracted temp dir would leak on every failed attempt.
+        await fs.rm(root, { recursive: true, force: true }).catch(() => { });
+        throw e;
+    }
 }
 /** Claude Design signature: <x-dc> + <script type="text/x-dc"> + support.js. */
 function detectFormat(html) {
@@ -699,7 +781,20 @@ export async function buildPackage(opts) {
         throw new Error("`title` is required (used as the course and item title in the manifest).");
     }
     const language = opts.language?.trim() || "fr-FR";
-    const identifier = opts.identifier?.trim() || "COURSE-" + slugify(title).toUpperCase();
+    // A manifest identifier is an xs:ID (NCName): no spaces, no leading digit.
+    // "mon cours 2024" would produce valid-looking XML that strict LMS importers
+    // (SCORM Cloud included) reject. Fall back to a conformant generated id.
+    const rawId = opts.identifier?.trim();
+    let identifier;
+    if (rawId && /^[A-Za-z_][A-Za-z0-9._-]*$/.test(rawId)) {
+        identifier = rawId;
+    }
+    else {
+        identifier = "COURSE-" + slugify(rawId || title).toUpperCase();
+        if (rawId) {
+            ctx.warnings.push("`identifier` fourni non conforme xs:ID (« " + rawId + " ») — remplacé par « " + identifier + " ».");
+        }
+    }
     const mastery = typeof opts.masteryScore === "number" && opts.masteryScore >= 0 && opts.masteryScore <= 1 ? opts.masteryScore : undefined;
     // Detect a bundle input (directory or .zip on disk).
     let bundle = null;
@@ -743,6 +838,21 @@ export async function buildPackage(opts) {
                 let outEntry = injectIntoDcHtml(entryHtml, injection);
                 if (!/^\s*<!doctype/i.test(outEntry)) {
                     outEntry = "<!DOCTYPE html>\n" + outEntry;
+                }
+                // A .dc bundle is a state-driven app: its screens are swapped in JS, not
+                // laid out as document sections. Structural auto-milestoning cannot work
+                // here, so if the content declares no tracking signal at all, the package
+                // would import and run fine while reporting NOTHING to the LMS. Fail loudly
+                // in the warnings rather than silently shipping an untracked course.
+                if (!hasTrackingSignal(bundle, entryHtml, supJs)) {
+                    ctx.warnings.push("AUCUN SUIVI : ce bundle ne déclare aucun signal de progression. Le module s'importera et " +
+                        "tournera, mais le LMS ne recevra ni progression ni score — seule une complétion « visité » " +
+                        "sera marquée à la fermeture du module. Le jalonnage " +
+                        "automatique s'appuie sur la structure du document et ne s'applique pas à une application " +
+                        "à état (React/SPA). Ajoutez dans votre contenu : window.SCORM2004.declare('etape-1') au " +
+                        "démarrage pour chaque étape, window.SCORM2004.reach('etape-1') quand elle est franchie, " +
+                        "et window.SCORM2004.score(obtenu, 0, total) pour un quiz. Les CustomEvent 'scorm:progress' " +
+                        "(0..1), 'scorm:complete' et 'scorm:score' sont acceptés en équivalent.");
                 }
                 const zip = new JSZip();
                 // preserve the whole tree
@@ -804,6 +914,18 @@ export async function buildPackage(opts) {
     // ---------- Path B: single self-contained HTML (v1 behaviour) ----------
     let rawHtml = opts.html;
     if (opts.inputPath) {
+        // A binary file (PNG, PDF…) read as utf8 would be silently wrapped in HTML
+        // by cheerio and shipped as a "successful" but unusable package. Sniff the
+        // first bytes and refuse with a clear error instead.
+        const head = await fs.readFile(opts.inputPath).then((b) => b.subarray(0, 512));
+        const looksBinary = head.includes(0) ||
+            head.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])) || // PNG
+            head.subarray(0, 4).toString("latin1") === "%PDF" ||
+            head.subarray(0, 2).toString("latin1") === "PK"; // zip-like without .zip extension
+        if (looksBinary) {
+            throw new Error("`input_path` doesn't look like an HTML file (binary content detected: " + path.basename(opts.inputPath) + "). " +
+                "Pass an .html file, a module folder, or a .zip bundle.");
+        }
         rawHtml = await fs.readFile(opts.inputPath, "utf8");
         ctx.baseDir = path.dirname(path.resolve(opts.inputPath));
     }

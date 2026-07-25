@@ -19,12 +19,48 @@ import { z } from "zod";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 import { buildPackage } from "./converter.js";
 
 const server = new McpServer({
   name: "scorm-mcp-server",
-  version: "2.0.0",
+  version: "2.0.1",
 });
+
+/**
+ * Output directory resolution.
+ *
+ * A directory coming from the host (MCPB `user_config`, passed through
+ * SCORM_OUTPUT_DIR) can arrive with its template variables UNEXPANDED — e.g. the
+ * literal string "${HOME}/scorm-packages" when the user leaves an optional
+ * directory field empty. Resolving that as a path makes the server try to create
+ * a folder literally named "${HOME}" and fail with ENOENT, which surfaces to the
+ * user as "the MCP is broken" even though nothing else is wrong.
+ *
+ * So: expand the variables the MCPB spec defines ourselves, and if anything is
+ * still unexpanded afterwards, treat the value as "not configured" and fall back.
+ */
+const HOST_VARS: Record<string, string> = {
+  HOME: os.homedir(),
+  DESKTOP: path.join(os.homedir(), "Desktop"),
+  DOCUMENTS: path.join(os.homedir(), "Documents"),
+  DOWNLOADS: path.join(os.homedir(), "Downloads"),
+  pathSeparator: path.sep,
+  "/": path.sep,
+};
+
+export function resolveOutputDir(explicit?: string, env?: string): string {
+  for (const candidate of [explicit, env]) {
+    const raw = candidate?.trim();
+    if (!raw) continue;
+    const expanded = raw.replace(/\$\{([^}]*)\}/g, (whole, name: string) =>
+      Object.prototype.hasOwnProperty.call(HOST_VARS, name) ? HOST_VARS[name] : whole,
+    );
+    if (/\$\{[^}]*\}/.test(expanded)) continue; // still templated → unusable
+    return path.resolve(expanded);
+  }
+  return path.join(os.homedir(), "scorm-packages");
+}
 
 // Zod RAW SHAPE (see note above).
 const InputShape = {
@@ -142,11 +178,7 @@ Notes:
         };
       }
 
-      const outDir = params.output_dir
-        ? path.resolve(params.output_dir)
-        : process.env.SCORM_OUTPUT_DIR
-        ? path.resolve(process.env.SCORM_OUTPUT_DIR)
-        : path.join(os.homedir(), "scorm-packages");
+      const outDir = resolveOutputDir(params.output_dir, process.env.SCORM_OUTPUT_DIR);
 
       await fs.mkdir(outDir, { recursive: true });
 
@@ -215,7 +247,14 @@ async function main(): Promise<void> {
   console.error("scorm-mcp-server running on stdio");
 }
 
-main().catch((error) => {
-  console.error("Fatal error:", error);
-  process.exit(1);
-});
+// Only start the transport when this file is the process entry point, so tests
+// (and any other consumer) can import helpers from here without spawning a server.
+const isEntryPoint =
+  !!process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isEntryPoint) {
+  main().catch((error) => {
+    console.error("Fatal error:", error);
+    process.exit(1);
+  });
+}
