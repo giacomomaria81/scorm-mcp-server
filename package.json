@@ -2,13 +2,34 @@
   "name": "scorm-mcp-server",
   "version": "2.0.0",
   "description": "MCP server: turn self-contained HTML or a Claude Design (.dc) bundle into a SCORM 2004 package any LMS can import — offline assets, milestone/score tracking, bundled ADL schemas.",
+  "mcpName": "io.github.giacomomaria81/scorm-mcp-server",
   "type": "module",
   "bin": {
     "scorm-mcp-server": "dist/index.js"
   },
   "main": "dist/index.js",
+  "files": [
+    "dist",
+    "schemas",
+    "scorm-test-harness.html",
+    "icon.png",
+    "manifest.json",
+    "README.md",
+    "LICENSE",
+    "PRIVACY.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/giacomomaria81/scorm-mcp-server.git"
+  },
+  "homepage": "https://github.com/giacomomaria81/scorm-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/giacomomaria81/scorm-mcp-server/issues"
+  },
+  "author": "giacomomaria81",
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "node dist/index.js",
     "test": "npm run build && node test/converter.test.mjs && node test/runtime.test.mjs && node test/mcp.test.mjs && node test/validate-schema.mjs && node test/audit-fixes.test.mjs && node test/features-1.3.test.mjs && node test/auto-milestones.test.mjs && node test/v2-features.test.mjs",
     "test:converter": "node test/converter.test.mjs",

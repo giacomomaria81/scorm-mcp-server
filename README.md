@@ -2,6 +2,7 @@
 
 > Turn self-contained HTML **or a Claude Design `.dc` bundle** into a **SCORM 2004 4th Edition** package ready to import into any LMS — assets inlined for **100% offline**, completion / progress / **score** tracking injected, ADL schemas bundled.
 
+[![npm](https://img.shields.io/npm/v/scorm-mcp-server?logo=npm&color=cb3837)](https://www.npmjs.com/package/scorm-mcp-server)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)
 ![SCORM](https://img.shields.io/badge/SCORM-2004%204th%20Ed.-0a66c2)
@@ -55,23 +56,28 @@ The runtime maps these to `cmi.score.*`, sets `success_status = passed/failed` a
 ### Option A — one-click (recommended)
 Download **`scorm-mcp-server-x.y.z.mcpb`** from the [Releases](../../releases), then in **Claude Desktop → Settings → Extensions**, drag-drop the `.mcpb`, pick an output folder, and enable it.
 
-### Option B — manual (developer)
-```bash
-git clone <this-repo> && cd scorm-mcp-server
-npm install        # dist/ is prebuilt; npm run build is optional
-```
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+### Option B — npm (any MCP client)
+No install step: add this to your client's MCP config (`~/Library/Application Support/Claude/claude_desktop_config.json` for Claude Desktop):
 ```json
 {
   "mcpServers": {
     "scorm": {
-      "command": "node",
-      "args": ["/ABSOLUTE/PATH/scorm-mcp-server/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "scorm-mcp-server"],
       "env": { "SCORM_OUTPUT_DIR": "/ABSOLUTE/PATH/scorm-packages" }
     }
   }
 }
 ```
+Registry name: **`io.github.giacomomaria81/scorm-mcp-server`** ([MCP registry](https://registry.modelcontextprotocol.io/v0/servers?search=scorm-mcp-server)).
+
+### Option C — from source (developer)
+```bash
+git clone <this-repo> && cd scorm-mcp-server
+npm install        # dist/ is prebuilt; npm run build is optional
+```
+Then point the config at `node /ABSOLUTE/PATH/scorm-mcp-server/dist/index.js`.
+
 Restart Claude. The `scorm_package` tool is now available.
 
 ## Usage
