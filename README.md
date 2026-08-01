@@ -1,13 +1,13 @@
 # scorm-mcp-server
 
-> Turn self-contained HTML **or a Claude Design `.dc` bundle** into a **SCORM 2004 4th Edition** package ready to import into any LMS — assets inlined for **100% offline**, completion / progress / **score** tracking injected, ADL schemas bundled.
+> Turn self-contained HTML **or a Claude Design `.dc` bundle** into a **SCORM 2004 (or 1.2)** package ready to import into any LMS — assets inlined for **100% offline**, completion / progress / **score** tracking injected, ADL schemas bundled.
 
 [![npm](https://img.shields.io/npm/v/scorm-mcp-server?logo=npm&color=cb3837)](https://www.npmjs.com/package/scorm-mcp-server)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)
-![SCORM](https://img.shields.io/badge/SCORM-2004%204th%20Ed.-0a66c2)
+![SCORM](https://img.shields.io/badge/SCORM-2004%20%2B%201.2-0a66c2)
 ![MCP](https://img.shields.io/badge/MCP-server-6E56CF)
-![Tests](https://img.shields.io/badge/tests-159%2F159%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-212%2F212%20passing-brightgreen)
 ![Validated](https://img.shields.io/badge/SCORM%20Cloud-validated-success)
 
 ![SCORM test harness demo](./assets/demo.gif)
@@ -26,7 +26,7 @@ An **MCP server** exposing a single tool, **`scorm_package`**, that converts a f
 
 ## ✅ Status — validated on a real LMS
 
-- **159/159 automated checks** green: 23 converter · 15 runtime · 12 MCP · 1 schema conformance (`xmllint`) · 6 security · 11 features · 13 auto-milestones · 21 V2 (bundle / `.dc` / score) · 10 output-dir · 9 tracking-signal · 32 hardening (2.0.1 audit) — plus 6 bonus strict-runtime checks (`scorm-again`).
+- **212/212 automated checks** green: 23 converter · 15 runtime · 14 MCP · 1 schema conformance (`xmllint`) · 6 security · 11 features · 13 auto-milestones · 21 V2 (bundle / `.dc` / score) · 10 output-dir · 9 tracking-signal · 32 hardening · 29 SCORM 1.2 · 12 CLI/batch · 16 web UI — plus 6 bonus strict-runtime checks (`scorm-again`).
 - **SCORM Cloud (real LMS):** imports cleanly (recognized as *SCORM 2004 4th Ed.*, "manifest looks great"), and the dashboard reports **completion = complete, success = passed, time tracked**.
 
 ## Input formats
@@ -50,6 +50,45 @@ window.dispatchEvent(new CustomEvent("scorm:progress", { detail: 0.5 }));  // 0.
 window.dispatchEvent(new CustomEvent("scorm:complete"));
 ```
 The runtime maps these to `cmi.score.*`, sets `success_status = passed/failed` against `mastery_score`, and reports completion/progress. (`dc:*` event names are accepted as aliases.)
+
+
+## SCORM 1.2, batch mode, CLI (v2.1)
+
+**SCORM 1.2** — pass `scorm_version: "1.2"` and you get a 1.2 manifest (validated
+against the bundled 1.2 XSDs, with `adlcp:masteryscore` when `mastery_score` is
+set). The injected runtime is *adaptive*: it speaks to whichever API the hosting
+LMS exposes (`API_1484_11` or `API`), maps the data model (single
+`lesson_status`, 0-100 score, `HH:MM:SS` session time, 4096-char suspend data)
+and never downgrades a `passed` status.
+
+**Batch** — `batch: true` treats `input_path` as a directory of courses (each
+sub-directory, `.zip` or `.html` = one course). One package per course, one
+consolidated `batch-report.json`, and a broken course never sinks the others.
+
+**CLI** — no MCP client required:
+
+```bash
+npx -y scorm-mcp-server ui            # local drag & drop web UI
+npx -y scorm-mcp-server pack course.html --title "My course"
+npx -y scorm-mcp-server pack ./courses --batch --scorm-version 1.2
+npx -y scorm-mcp-server selftest      # 1-second health check
+```
+
+**Web UI** — `ui` opens a localhost page: drop an .html or .zip, pick the SCORM
+edition and an optional pass mark, download the package. Runs entirely on your
+machine; nothing is uploaded anywhere.
+
+**Library** — `buildPackage()` is a public API for pipelines and SaaS backends:
+
+```js
+import { buildPackage } from "scorm-mcp-server";
+const r = await buildPackage({ html, title: "My course", scormVersion: "1.2", masteryScore: 0.6 });
+// r.zip (Buffer) · r.fileName · r.warnings · r.milestoneIds …
+```
+
+**Diagnostic** — the `scorm_selftest` MCP tool packages a constant built-in HTML
+and reports version, duration and output path: it separates "server broken"
+from "input problem" in one second.
 
 ## Install
 

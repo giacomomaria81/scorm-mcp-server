@@ -3,7 +3,7 @@
   "name": "io.github.giacomomaria81/scorm-mcp-server",
   "title": "SCORM Packager (HTML → SCORM 2004)",
   "description": "Turn HTML or Claude Design bundles into LMS-ready SCORM 2004 packages — offline, tracked.",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "websiteUrl": "https://github.com/giacomomaria81/scorm-mcp-server#readme",
   "repository": {
     "url": "https://github.com/giacomomaria81/scorm-mcp-server",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "scorm-mcp-server",
-      "version": "2.0.1",
+      "version": "2.1.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -31,9 +31,9 @@
     },
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/giacomomaria81/scorm-mcp-server/releases/download/v2.0.1/scorm-mcp-server-2.0.1.mcpb",
-      "version": "2.0.1",
-      "fileSha256": "1a63b6f96305a51e52e477e044f51e5de1a859ae4fe99d9d92afed283bab30f0",
+      "identifier": "https://github.com/giacomomaria81/scorm-mcp-server/releases/download/v2.1.0/scorm-mcp-server-2.1.0.mcpb",
+      "version": "2.1.0",
+      "fileSha256": "77d457989f4a4514a9634b1295a1076c58182b29e80ff9467294eb825ab17d4d",
       "transport": {
         "type": "stdio"
       }

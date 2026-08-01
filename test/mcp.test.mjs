@@ -26,13 +26,16 @@ try {
   console.log("Connected to server (handshake OK).");
 
   const { tools } = await client.listTools();
-  check("server exposes exactly 1 tool", tools.length === 1);
-  check("tool is named 'scorm_package'", tools[0]?.name === "scorm_package");
-  check("tool has an inputSchema", Boolean(tools[0]?.inputSchema));
+  check("server exposes exactly 2 tools (package + selftest)", tools.length === 2);
+  const pkg = tools.find((t) => t.name === "scorm_package");
+  check("scorm_package present", Boolean(pkg));
+  check("scorm_selftest present", tools.some((t) => t.name === "scorm_selftest"));
+  check("tool has an inputSchema", Boolean(pkg?.inputSchema));
   // Regression guard: a ZodObject (instead of a raw shape) publishes an EMPTY
   // schema and schema-strict clients (Claude Desktop) strip all arguments.
-  check("inputSchema exposes named properties (title)", Boolean(tools[0]?.inputSchema?.properties?.title));
-  check("inputSchema exposes auto_milestones", Boolean(tools[0]?.inputSchema?.properties?.auto_milestones));
+  check("inputSchema exposes named properties (title)", Boolean(pkg?.inputSchema?.properties?.title));
+  check("inputSchema exposes auto_milestones", Boolean(pkg?.inputSchema?.properties?.auto_milestones));
+  check("inputSchema exposes scorm_version + batch (2.1)", Boolean(pkg?.inputSchema?.properties?.scorm_version) && Boolean(pkg?.inputSchema?.properties?.batch));
 
   const TINY = `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>MCP</title></head>
 <body><section data-jalon="s1" data-trigger="view">Un</section>

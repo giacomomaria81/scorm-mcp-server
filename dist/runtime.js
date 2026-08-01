@@ -24,11 +24,16 @@ export const SCORM_RUNTIME = `
   window.__SCORM_JALONS__ = true;
 
   var SUSPEND_VERSION = 1;
-  var SUSPEND_MAX_CHARS = 64000; // SCORM 2004 SPM for cmi.suspend_data
+  // Suspend-data SPM depends on the dialect the LMS speaks:
+  // SCORM 2004 allows 64000 chars, SCORM 1.2 only 4096.
+  var SUSPEND_MAX_2004 = 64000, SUSPEND_MAX_12 = 4096;
   var MAX_FRAME_DEPTH = 500;
   var COMMIT_INTERVAL_MS = 5000;
 
-  var api = null, initialized = false, terminated = false, previewMode = false, successOnComplete = false;
+  // dialect: "2004" when API_1484_11 is found, "12" when a SCORM 1.2 API is
+  // found. The runtime speaks whichever the hosting LMS exposes, so the same
+  // package works in both worlds; only the manifest differs between versions.
+  var api = null, dialect = null, initialized = false, terminated = false, previewMode = false, successOnComplete = false;
   var masteryScore = null, lastScaled = null, lastScore = null;
   try { if (typeof window.__SCORM_MASTERY === "number" && window.__SCORM_MASTERY >= 0 && window.__SCORM_MASTERY <= 1) { masteryScore = window.__SCORM_MASTERY; } } catch (e) {}
   var milestoneIds = [], reached = {}, reachedCount = 0, lastProgress = 0, completed = false;
@@ -39,10 +44,15 @@ export const SCORM_RUNTIME = `
   function keysOf(o) { var a = [], k; for (k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) { a.push(k); } } return a; }
 
   // ---- API discovery (content side) ---------------------------------------
+  // Looks for SCORM 2004 (API_1484_11) first, then SCORM 1.2 (API), walking
+  // parent frames. Returns { api, dialect } or null.
   function findAPIInWindow(win) {
     var depth = 0, w = win, parent;
     while (w && depth < MAX_FRAME_DEPTH) {
-      try { if (w.API_1484_11) { return w.API_1484_11; } }
+      try {
+        if (w.API_1484_11) { return { api: w.API_1484_11, dialect: "2004" }; }
+        if (w.API) { return { api: w.API, dialect: "12" }; }
+      }
       catch (e) { return null; } // cross-origin frame -> cannot reach further
       try { parent = w.parent; } catch (e) { return null; }
       if (parent && parent !== w) { w = parent; depth++; } else { break; }
@@ -56,25 +66,61 @@ export const SCORM_RUNTIME = `
     return f;
   }
 
+  // ---- dialect bridge ------------------------------------------------------
+  // The logical layer below always speaks SCORM 2004 element names; this
+  // bridge translates calls and element names for a SCORM 1.2 LMS.
+  function apiInit() { try { return dialect === "12" ? api.LMSInitialize("") : api.Initialize(""); } catch (e) { return "false"; } }
+  function apiTerminate() { try { return dialect === "12" ? api.LMSFinish("") : api.Terminate(""); } catch (e) { return "false"; } }
+  function apiGet(el) { return dialect === "12" ? api.LMSGetValue(el) : api.GetValue(el); }
+  function apiSet(el, v) { return dialect === "12" ? api.LMSSetValue(el, v) : api.SetValue(el, v); }
+  function apiCommit() { return dialect === "12" ? api.LMSCommit("") : api.Commit(""); }
+  function apiLastError() { try { return String(dialect === "12" ? api.LMSGetLastError() : api.GetLastError()); } catch (e) { return ""; } }
+  function el12(el) {
+    // element-name mapping 2004 -> 1.2; returns null when 1.2 has no equivalent
+    if (el === "cmi.completion_status" || el === "cmi.success_status") { return "cmi.core.lesson_status"; }
+    if (el === "cmi.location") { return "cmi.core.lesson_location"; }
+    if (el === "cmi.session_time") { return "cmi.core.session_time"; }
+    if (el === "cmi.exit") { return "cmi.core.exit"; }
+    if (el === "cmi.score.raw") { return "cmi.core.score.raw"; }
+    if (el === "cmi.score.min") { return "cmi.core.score.min"; }
+    if (el === "cmi.score.max") { return "cmi.core.score.max"; }
+    if (el === "cmi.score.scaled") { return null; } // 1.2 has no scaled score
+    if (el === "cmi.progress_measure") { return null; } // 1.2 has no progress
+    return el; // cmi.suspend_data is identical
+  }
+  function suspendMax() { return dialect === "12" ? SUSPEND_MAX_12 : SUSPEND_MAX_2004; }
+
   // ---- guarded API calls ---------------------------------------------------
   function get(el) {
     if (!api || !initialized || terminated) { return ""; }
-    try { return api.GetValue(el); } catch (e) { log("GetValue error: " + el); return ""; }
+    var mapped = dialect === "12" ? el12(el) : el;
+    if (!mapped) { return ""; }
+    try { return apiGet(mapped); } catch (e) { log("GetValue error: " + mapped); return ""; }
   }
+  // lesson_status is a single field in 1.2 shared by completion AND success:
+  // passed/failed must win over completed. Track the strongest value written.
+  var LESSON_RANK = { "not attempted": 0, browsed: 0, incomplete: 1, completed: 2, failed: 3, passed: 3 };
+  var lessonWritten = null;
   function set(el, val) {
     if (!api || !initialized || terminated) { return; }
+    var mapped = dialect === "12" ? el12(el) : el, v = String(val);
+    if (!mapped) { return; } // element has no 1.2 equivalent: skip silently
+    if (dialect === "12" && mapped === "cmi.core.lesson_status") {
+      if (lessonWritten !== null && (LESSON_RANK[v] || 0) < (LESSON_RANK[lessonWritten] || 0)) { return; }
+      lessonWritten = v;
+    }
+    if (dialect === "12" && mapped === "cmi.core.lesson_location" && v.length > 255) { v = v.slice(0, 255); } // 1.2 SPM
     try {
-      var ok = api.SetValue(el, String(val));
+      var ok = apiSet(mapped, v);
       if (ok === "false" || ok === false) {
-        var ec = ""; try { ec = String(api.GetLastError()); } catch (e2) {}
-        log("SetValue refused: " + el + " (LMS error " + ec + ")");
+        log("SetValue refused: " + mapped + " (LMS error " + apiLastError() + ")");
       }
-    } catch (e) { log("SetValue error: " + el); }
+    } catch (e) { log("SetValue error: " + mapped); }
   }
   function doCommit() {
     lastCommit = (new Date()).getTime();
     if (!api || !initialized || terminated) { return; }
-    try { api.Commit(""); } catch (e) { log("Commit error"); }
+    try { apiCommit(); } catch (e) { log("Commit error"); }
   }
   function scheduleCommit() {
     if (commitTimer) { return; }
@@ -95,6 +141,20 @@ export const SCORM_RUNTIME = `
     if (s >= 60) { s = 59.99; }
     return "PT" + h + "H" + m + "M" + s + "S";
   }
+  // SCORM 1.2 wants HH:MM:SS.ss (CMITimespan), hours zero-padded to 2+ digits
+  function hhmmss(ms) {
+    if (ms < 0) { ms = 0; }
+    var totalSec = ms / 1000;
+    var h = Math.floor(totalSec / 3600);
+    var rem = totalSec - h * 3600;
+    var m = Math.floor(rem / 60);
+    var s = Math.round((rem - m * 60) * 100) / 100;
+    if (s >= 60) { s = 59.99; }
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    var sStr = s < 10 ? "0" + s.toFixed(2) : s.toFixed(2);
+    return pad(h) + ":" + pad(m) + ":" + sStr;
+  }
+  function sessionTime(ms) { return dialect === "12" ? hhmmss(ms) : iso8601(ms); }
   function pushProgress() {
     var total = milestoneIds.length;
     // total 0 must NOT mean "100%": a SPA that declares its milestones after
@@ -115,7 +175,7 @@ export const SCORM_RUNTIME = `
     var json = JSON.stringify({ v: SUSPEND_VERSION, reached: ids });
     // Above the SPM the LMS rejects the whole SetValue (silently for us): better
     // to persist a truncated resume list than to lose resume entirely.
-    while (json.length > SUSPEND_MAX_CHARS && ids.length > 0) {
+    while (json.length > suspendMax() && ids.length > 0) {
       ids.pop();
       json = JSON.stringify({ v: SUSPEND_VERSION, reached: ids });
     }
@@ -140,10 +200,17 @@ export const SCORM_RUNTIME = `
     if (scaled < 0) { scaled = 0; } if (scaled > 1) { scaled = 1; }
     lastScaled = scaled;
     lastScore = { raw: raw, min: min, max: max }; // kept for replay after Initialize
-    set("cmi.score.raw", String(raw));
-    set("cmi.score.min", String(min));
-    set("cmi.score.max", String(max));
-    set("cmi.score.scaled", fmtScaled(scaled));
+    if (dialect === "12") {
+      // 1.2 score.raw is a CMIDecimal 0..100: report the normalised percentage
+      set("cmi.score.raw", String(Math.round(scaled * 100)));
+      set("cmi.score.min", "0");
+      set("cmi.score.max", "100");
+    } else {
+      set("cmi.score.raw", String(raw));
+      set("cmi.score.min", String(min));
+      set("cmi.score.max", String(max));
+      set("cmi.score.scaled", fmtScaled(scaled));
+    }
     if (masteryScore !== null) { set("cmi.success_status", scaled >= masteryScore ? "passed" : "failed"); }
     log("score reported: " + raw + " [" + min + ".." + max + "] scaled=" + fmtScaled(scaled));
     scheduleCommit();
@@ -260,7 +327,9 @@ export const SCORM_RUNTIME = `
         }
       } catch (e) { log("suspend_data parse error"); }
     }
-    if (get("cmi.completion_status") === "completed") { completed = true; }
+    var cs0 = get("cmi.completion_status");
+    // in 1.2 the same field also carries success: passed/failed imply completed
+    if (cs0 === "completed" || cs0 === "passed" || cs0 === "failed") { completed = true; }
     pushProgress();
     var loc = get("cmi.location");
     if (loc) { var y = parseInt(loc, 10); if (!isNaN(y) && y > 0) { window.setTimeout(function () { window.scrollTo(0, y); }, 60); } }
@@ -268,14 +337,22 @@ export const SCORM_RUNTIME = `
 
   // ---- lifecycle -----------------------------------------------------------
   function startSession() {
-    api = locateAPI();
+    var found = locateAPI();
+    api = found ? found.api : null;
+    dialect = found ? found.dialect : null;
     if (!api) { previewMode = true; log("no LMS API found - preview mode (no tracking)"); collectMilestones(); wireTriggers(); watchDynamicMilestones(); return; }
-    var res; try { res = api.Initialize(""); } catch (e) { res = "false"; }
+    log("LMS API found (SCORM " + (dialect === "12" ? "1.2" : "2004") + ")");
+    var res = apiInit();
     initialized = (res === "true" || res === true);
-    if (!initialized) { var err = ""; try { err = String(api.GetLastError()); } catch (e2) {} if (err === "103") { initialized = true; } }
+    if (!initialized) {
+      var err = apiLastError();
+      // 103 = already initialized (2004); 101 covers some 1.2 players' re-init
+      if (err === "103" || (dialect === "12" && err === "101")) { initialized = true; }
+    }
     if (!initialized) { previewMode = true; log("Initialize failed - preview mode (no tracking)"); collectMilestones(); wireTriggers(); watchDynamicMilestones(); return; }
     startTime = (new Date()).getTime();
-    if (get("cmi.completion_status") !== "completed") { set("cmi.completion_status", "incomplete"); }
+    var cs = get("cmi.completion_status");
+    if (cs !== "completed" && cs !== "passed" && cs !== "failed") { set("cmi.completion_status", "incomplete"); }
     collectMilestones();
     restore();
     // Replay state accumulated BEFORE Initialize: events fired by the content at
@@ -292,7 +369,7 @@ export const SCORM_RUNTIME = `
     if (previewMode || !initialized || terminated) { return; }
     if (commitTimer) { window.clearTimeout(commitTimer); commitTimer = null; }
     var elapsed = startTime ? ((new Date()).getTime() - startTime) : 0;
-    set("cmi.session_time", iso8601(elapsed));
+    set("cmi.session_time", sessionTime(elapsed));
     if (!completed && milestoneIds.length === 0) {
       // No milestone model at all (content declared nothing): "visited" is the
       // only signal available — report completed on exit rather than leaving
@@ -309,7 +386,7 @@ export const SCORM_RUNTIME = `
     // Flip the flag only after the final writes: set()/get() refuse to run once
     // terminated (protects against post-bfcache writes on iOS/Safari).
     terminated = true;
-    try { api.Terminate(""); } catch (e) { log("Terminate error"); }
+    if (apiTerminate() === "false") { log("Terminate refused (LMS error " + apiLastError() + ")"); }
   }
 
   // public hook for programmatic milestones
@@ -338,7 +415,7 @@ export const SCORM_RUNTIME = `
     // comes back alive. Without a re-Initialize every later write is an LMS
     // error 133. Start a fresh session against the API.
     if (ev && ev.persisted && terminated) {
-      terminated = false; initialized = false; api = null;
+      terminated = false; initialized = false; api = null; dialect = null; lessonWritten = null;
       startSession();
     }
   });

@@ -38,6 +38,12 @@ export interface BuildOptions {
   vendorCdn?: boolean;
   /** Input format. Default 'auto' (detects Claude Design .dc bundles by signature). */
   format?: "auto" | "self-contained-html" | "claude-design";
+  /**
+   * SCORM edition of the produced package. Default "2004" (4th Edition).
+   * "1.2" produces a SCORM 1.2 manifest + bundled 1.2 schemas; the injected
+   * runtime is adaptive and speaks whichever API the hosting LMS exposes.
+   */
+  scormVersion?: "2004" | "1.2";
 }
 
 export interface BuildResult {
@@ -52,6 +58,7 @@ export interface BuildResult {
   format: "html" | "claude-design";
   filesCount: number;
   vendored: string[];
+  scormVersion: "2004" | "1.2";
 }
 
 const MAX_ASSET_BYTES = 5 * 1024 * 1024; // per-asset warning threshold
@@ -547,6 +554,54 @@ ${fileLines}
 `;
 }
 
+/**
+ * SCORM 1.2 manifest. Differences vs 2004: imsproject namespaces, lowercase
+ * adlcp:scormtype, schemaversion "1.2", and mastery expressed as
+ * <adlcp:masteryscore> (0..100) on the item instead of imsss sequencing.
+ */
+function buildManifest12(identifier: string, title: string, _language: string, entryHref = "index.html", extraFiles: string[] = [], masteryScore?: number): string {
+  const t = escapeXml(title);
+  const id = escapeXml(identifier);
+  const masteryLine = typeof masteryScore === "number"
+    ? `\n        <adlcp:masteryscore>${Math.round(masteryScore * 100)}</adlcp:masteryscore>`
+    : "";
+  const fileLines = [entryHref, ...extraFiles]
+    .map((f) => `      <file href="${escapeXml(encodeHref(f))}"/>`)
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<manifest identifier="${id}" version="1.2"
+  xmlns="http://www.imsproject.org/xsd/imscp_rootv1p1p2"
+  xmlns:adlcp="http://www.adlnet.org/xsd/adlcp_rootv1p2"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.imsproject.org/xsd/imscp_rootv1p1p2 imscp_rootv1p1p2.xsd http://www.adlnet.org/xsd/adlcp_rootv1p2 adlcp_rootv1p2.xsd">
+  <metadata>
+    <schema>ADL SCORM</schema>
+    <schemaversion>1.2</schemaversion>
+  </metadata>
+  <organizations default="ORG-1">
+    <organization identifier="ORG-1">
+      <title>${t}</title>
+      <item identifier="ITEM-1" identifierref="RES-1" isvisible="true">
+        <title>${t}</title>${masteryLine}
+      </item>
+    </organization>
+  </organizations>
+  <resources>
+    <resource identifier="RES-1" type="webcontent" adlcp:scormtype="sco" href="${escapeXml(encodeHref(entryHref))}">
+${fileLines}
+    </resource>
+  </resources>
+</manifest>
+`;
+}
+
+/** Dialect-dispatching manifest builder. */
+function buildManifestFor(v: "2004" | "1.2", identifier: string, title: string, language: string, entryHref: string, extraFiles: string[], masteryScore?: number): string {
+  return v === "1.2"
+    ? buildManifest12(identifier, title, language, entryHref, extraFiles, masteryScore)
+    : buildManifest(identifier, title, language, entryHref, extraFiles, masteryScore);
+}
+
 // --------------------------------------------------------------------------
 // ADL XSD schema bundling (offline conformance: xsi:schemaLocation resolves
 // to these sibling files inside the package)
@@ -573,20 +628,25 @@ export function hasTrackingSignal(bundle: Bundle, entryHtml: string, supportJs: 
 }
 
 const SCHEMA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../schemas");
+const SCHEMA_DIR_12 = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../schemas12");
 
-async function bundleSchemas(zip: JSZip, ctx: Ctx): Promise<number> {
+async function bundleSchemas(zip: JSZip, ctx: Ctx, scormVersion: "2004" | "1.2" = "2004"): Promise<number> {
+  const dir = scormVersion === "1.2" ? SCHEMA_DIR_12 : SCHEMA_DIR;
   let entries: string[];
   try {
-    entries = await fs.readdir(SCHEMA_DIR);
+    entries = await fs.readdir(dir);
   } catch {
-    ctx.warnings.push("Schémas ADL introuvables (dossier schemas/ absent): paquet livré sans XSD embarqués.");
+    ctx.warnings.push("Schémas ADL introuvables (dossier " + path.basename(dir) + "/ absent): paquet livré sans XSD embarqués.");
     return 0;
   }
-  const xsds = entries.filter((f) => f.toLowerCase().endsWith(".xsd")).sort();
+  const xsds = entries
+    .filter((f) => f.toLowerCase().endsWith(".xsd"))
+    .filter((f) => f !== "wrapper12.xsd") // validation helper, not part of the PIF
+    .sort();
   let count = 0;
   for (const name of xsds) {
     try {
-      const data = await fs.readFile(path.join(SCHEMA_DIR, name));
+      const data = await fs.readFile(path.join(dir, name));
       zip.file(path.basename(name), data); // bundled at package root
       count++;
     } catch {
@@ -743,6 +803,8 @@ export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
     if (rawId) { ctx.warnings.push("`identifier` fourni non conforme xs:ID (« " + rawId + " ») — remplacé par « " + identifier + " »."); }
   }
   const mastery = typeof opts.masteryScore === "number" && opts.masteryScore >= 0 && opts.masteryScore <= 1 ? opts.masteryScore : undefined;
+  const scormVersion: "2004" | "1.2" = opts.scormVersion === "1.2" ? "1.2" : "2004";
+  const fileSuffix = scormVersion === "1.2" ? "-scorm12.zip" : "-scorm2004.zip";
 
   // Detect a bundle input (directory or .zip on disk).
   let bundle: Bundle | null = null;
@@ -802,15 +864,15 @@ export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
         for (const rel of bundle.files) { zip.file(rel, await fs.readFile(path.join(bundle.root, rel))); }
         zip.file(bundle.entryRel, outEntry); // overwrite entry with injected version
         for (const [rel, buf] of vendorFiles) { zip.file(rel, buf); }
-        zip.file("imsmanifest.xml", buildManifest(identifier, title, language, bundle.entryRel, [...bundle.files.filter((f) => f !== bundle!.entryRel), ...vendorFiles.keys()], mastery));
-        const schemasBundled = await bundleSchemas(zip, ctx);
+        zip.file("imsmanifest.xml", buildManifestFor(scormVersion, identifier, title, language, bundle.entryRel, [...bundle.files.filter((f) => f !== bundle!.entryRel), ...vendorFiles.keys()], mastery));
+        const schemasBundled = await bundleSchemas(zip, ctx, scormVersion);
         const zipBuffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
         if (ctx.bytes > MAX_TOTAL_BYTES) { ctx.warnings.push("Paquet volumineux (~" + Math.round(ctx.bytes / 1024 / 1024) + " Mo)."); }
         return {
-          zip: zipBuffer, fileName: slugify(title) + "-scorm2004.zip",
+          zip: zipBuffer, fileName: slugify(title) + fileSuffix,
           milestoneCount: 0, milestoneIds: [], warnings: ctx.warnings, inlinedBytes: ctx.bytes,
           schemasBundled, milestonesAuto: false, format: "claude-design",
-          filesCount: bundle.files.length + vendorFiles.size, vendored,
+          filesCount: bundle.files.length + vendorFiles.size, vendored, scormVersion,
         };
       }
 
@@ -825,13 +887,13 @@ export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
       const zip = new JSZip();
       for (const rel of bundle.files) { zip.file(rel, await fs.readFile(path.join(bundle.root, rel))); }
       zip.file(bundle.entryRel, outEntry);
-      zip.file("imsmanifest.xml", buildManifest(identifier, title, language, bundle.entryRel, bundle.files.filter((f) => f !== bundle!.entryRel), mastery));
-      const schemasBundled = await bundleSchemas(zip, ctx);
+      zip.file("imsmanifest.xml", buildManifestFor(scormVersion, identifier, title, language, bundle.entryRel, bundle.files.filter((f) => f !== bundle!.entryRel), mastery));
+      const schemasBundled = await bundleSchemas(zip, ctx, scormVersion);
       const zipBuffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
       return {
-        zip: zipBuffer, fileName: slugify(title) + "-scorm2004.zip",
+        zip: zipBuffer, fileName: slugify(title) + fileSuffix,
         milestoneCount: milestoneIds.length, milestoneIds, warnings: ctx.warnings, inlinedBytes: ctx.bytes,
-        schemasBundled, milestonesAuto, format: "html", filesCount: bundle.files.length, vendored: [],
+        schemasBundled, milestonesAuto, format: "html", filesCount: bundle.files.length, vendored: [], scormVersion,
       };
     } finally {
       if (bundle.cleanup) { await fs.rm(bundle.root, { recursive: true, force: true }).catch(() => {}); }
@@ -875,17 +937,17 @@ export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
   if (milestoneIds.length === 0) {
     ctx.warnings.push("Aucun jalon [data-jalon] détecté : le module sera marqué 'completed' au chargement (pas de progression mesurée).");
   }
-  const manifest = buildManifest(identifier, title, language, "index.html", [], mastery);
+  const manifest = buildManifestFor(scormVersion, identifier, title, language, "index.html", [], mastery);
   let outHtml = finalHtml;
   if (!/^\s*<!doctype/i.test(outHtml)) { outHtml = "<!DOCTYPE html>\n" + outHtml; }
   const zip = new JSZip();
   zip.file("imsmanifest.xml", manifest);
   zip.file("index.html", outHtml);
-  const schemasBundled = await bundleSchemas(zip, ctx);
+  const schemasBundled = await bundleSchemas(zip, ctx, scormVersion);
   const zipBuffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
   return {
-    zip: zipBuffer, fileName: slugify(title) + "-scorm2004.zip",
+    zip: zipBuffer, fileName: slugify(title) + fileSuffix,
     milestoneCount: milestoneIds.length, milestoneIds, warnings: ctx.warnings, inlinedBytes: ctx.bytes,
-    schemasBundled, milestonesAuto, format: "html", filesCount: 1, vendored: [],
+    schemasBundled, milestonesAuto, format: "html", filesCount: 1, vendored: [], scormVersion,
   };
 }

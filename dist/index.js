@@ -21,9 +21,13 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { buildPackage } from "./converter.js";
+// Public library API: lets pipelines/backends do
+//   import { buildPackage } from "scorm-mcp-server";
+export { buildPackage } from "./converter.js";
+const SERVER_VERSION = "2.1.0";
 const server = new McpServer({
     name: "scorm-mcp-server",
-    version: "2.0.1",
+    version: SERVER_VERSION,
 });
 /**
  * Output directory resolution.
@@ -111,6 +115,14 @@ const InputShape = {
         .enum(["auto", "self-contained-html", "claude-design"])
         .optional()
         .describe("Input format. 'auto' (default) detects Claude Design .dc bundles by signature; override to force a pipeline."),
+    scorm_version: z
+        .enum(["2004", "1.2"])
+        .optional()
+        .describe("SCORM edition of the produced package. '2004' (default, 4th Edition) or '1.2' for legacy LMSs. The injected runtime is adaptive and works with both LMS APIs; this choice controls the manifest and bundled schemas."),
+    batch: z
+        .boolean()
+        .optional()
+        .describe("Treat input_path as a DIRECTORY containing several courses (each sub-directory, .zip or .html file = one course). Produces one package per course plus a consolidated report. Course titles default to the folder/file name; `title` is used as a prefix."),
 };
 server.registerTool("scorm_package", {
     title: "Package HTML as SCORM 2004",
@@ -171,6 +183,18 @@ Notes:
         }
         const outDir = resolveOutputDir(params.output_dir, process.env.SCORM_OUTPUT_DIR);
         await fs.mkdir(outDir, { recursive: true });
+        // ---------- batch mode: input_path is a directory of courses ----------
+        if (params.batch) {
+            if (!params.input_path) {
+                return { content: [{ type: "text", text: "Error: `batch` requires `input_path` (a directory of courses)." }], isError: true };
+            }
+            const report = await packBatch(params, outDir);
+            const human = "Batch: " + report.succeeded.length + "/" + report.total + " package(s) créés dans " + outDir + "\n" +
+                report.succeeded.map((r) => " ✓ " + r.course + " → " + r.file_name + (r.warnings.length ? "  (" + r.warnings.length + " warning(s))" : "")).join("\n") +
+                (report.failed.length ? "\nÉchecs:\n" + report.failed.map((f) => " ✗ " + f.course + " : " + f.error).join("\n") : "") +
+                "\nRapport détaillé: " + report.report_path;
+            return { content: [{ type: "text", text: human }], structuredContent: report };
+        }
         const result = await buildPackage({
             html: params.html,
             inputPath: params.input_path,
@@ -183,13 +207,14 @@ Notes:
             masteryScore: params.mastery_score,
             vendorCdn: params.vendor_cdn,
             format: params.format,
+            scormVersion: params.scorm_version,
         });
         const outputPath = path.join(outDir, result.fileName);
         await fs.writeFile(outputPath, result.zip);
         const output = {
             output_path: outputPath,
             file_name: result.fileName,
-            scorm_version: "2004 4th Edition",
+            scorm_version: result.scormVersion === "1.2" ? "1.2" : "2004 4th Edition",
             milestone_count: result.milestoneCount,
             milestone_ids: result.milestoneIds,
             milestones_auto: result.milestonesAuto,
@@ -200,7 +225,7 @@ Notes:
             size_bytes: result.zip.length,
             warnings: result.warnings,
         };
-        const human = "SCORM 2004 4th Edition package created.\n" +
+        const human = "SCORM " + (result.scormVersion === "1.2" ? "1.2" : "2004 4th Edition") + " package created.\n" +
             "File: " + outputPath + "\n" +
             "Size: " + (result.zip.length / 1024).toFixed(1) + " Ko\n" +
             "ADL XSD schemas bundled: " + result.schemasBundled + "\n" +
@@ -224,7 +249,203 @@ Notes:
         };
     }
 });
+function titleFromEntry(name) {
+    return name
+        .replace(/\.(zip|html?)$/i, "")
+        .replace(/[-_]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (c) => c.toUpperCase()) || name;
+}
+async function packBatch(params, outDir) {
+    const root = path.resolve(String(params.input_path));
+    const entries = (await fs.readdir(root, { withFileTypes: true }))
+        .filter((e) => !e.name.startsWith("."))
+        .filter((e) => e.isDirectory() || /\.(zip|html?)$/i.test(e.name))
+        .map((e) => e.name)
+        .sort();
+    const prefix = typeof params.title === "string" && params.title.trim() ? params.title.trim() + " — " : "";
+    const succeeded = [];
+    const failed = [];
+    for (const name of entries) {
+        try {
+            const result = await buildPackage({
+                inputPath: path.join(root, name),
+                title: prefix + titleFromEntry(name),
+                language: params.language ?? "fr-FR",
+                autoMilestones: params.auto_milestones !== false,
+                successOnCompletion: params.success_on_completion === true,
+                masteryScore: params.mastery_score,
+                vendorCdn: params.vendor_cdn,
+                format: params.format,
+                scormVersion: params.scorm_version,
+            });
+            const outputPath = path.join(outDir, result.fileName);
+            await fs.writeFile(outputPath, result.zip);
+            succeeded.push({
+                course: name, file_name: result.fileName, output_path: outputPath,
+                scorm_version: result.scormVersion, milestone_count: result.milestoneCount,
+                format: result.format, size_bytes: result.zip.length, warnings: result.warnings,
+            });
+        }
+        catch (err) {
+            // one broken course must never sink the other 199
+            failed.push({ course: name, error: err instanceof Error ? err.message : String(err) });
+        }
+    }
+    const report = { total: entries.length, succeeded, failed, report_path: path.join(outDir, "batch-report.json") };
+    await fs.writeFile(report.report_path, JSON.stringify(report, null, 2));
+    return report;
+}
+// --------------------------------------------------------------------------
+// scorm_selftest: instant "is the server alive and sane?" diagnostic
+// --------------------------------------------------------------------------
+const SELFTEST_HTML = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Selftest</title></head>" +
+    "<body><section><h2>Section A</h2><p>selftest</p></section><section><h2>Section B</h2><p>selftest</p></section></body></html>";
+server.registerTool("scorm_selftest", {
+    title: "SCORM packager self-test",
+    description: "Diagnostic tool with NO arguments: packages a constant built-in HTML and reports version, duration and output path. Distinguishes 'server broken' from 'input problem' in one second. Writes one small file (selftest-scorm2004.zip) into the output directory.",
+    inputSchema: {},
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+}, async () => {
+    try {
+        const t0 = Date.now();
+        const outDir = resolveOutputDir(undefined, process.env.SCORM_OUTPUT_DIR);
+        await fs.mkdir(outDir, { recursive: true });
+        const result = await buildPackage({ html: SELFTEST_HTML, title: "Selftest" });
+        const outputPath = path.join(outDir, result.fileName);
+        await fs.writeFile(outputPath, result.zip);
+        const output = {
+            ok: true,
+            server_version: SERVER_VERSION,
+            duration_ms: Date.now() - t0,
+            output_dir: outDir,
+            output_path: outputPath,
+            schemas_bundled: result.schemasBundled,
+            milestones_auto: result.milestoneCount,
+            node: process.version,
+        };
+        return {
+            content: [{ type: "text", text: "Selftest OK — v" + SERVER_VERSION + ", " + output.duration_ms + " ms, " + result.schemasBundled + " XSD, output: " + outputPath }],
+            structuredContent: output,
+        };
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: "Selftest FAILED: " + msg }], isError: true };
+    }
+});
+// --------------------------------------------------------------------------
+// CLI: `scorm-mcp-server pack <input> [options]` — no MCP client required
+// --------------------------------------------------------------------------
+const CLI_HELP = `scorm-mcp-server — HTML / Claude Design -> SCORM packager
+
+Usage:
+  scorm-mcp-server                      start the MCP server (stdio)
+  scorm-mcp-server ui [--port 3117]     open the local drag & drop web UI
+  scorm-mcp-server pack <input> [opts]  package a file/folder/zip from the CLI
+  scorm-mcp-server selftest             build a constant test package
+
+Options for pack:
+  --title <t>          course title (default: derived from the file name)
+  --out <dir>          output directory (default: $SCORM_OUTPUT_DIR or ~/scorm-packages)
+  --scorm-version <v>  2004 (default) | 1.2
+  --mastery <0..1>     pass threshold; enables score-based success
+  --language <tag>     BCP-47 tag, default fr-FR
+  --batch              treat <input> as a directory of courses (one package each)
+  --no-auto-milestones disable structural milestone auto-generation
+  --success-on-completion  report success=passed on completion
+`;
+function cliArg(args, name) {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+}
+export async function runCli(argv) {
+    const [cmd, ...args] = argv;
+    if (cmd === "ui") {
+        const { startUi } = await import("./ui.js");
+        const port = cliArg(args, "--port") ? Number(cliArg(args, "--port")) : 3117;
+        const outDir = resolveOutputDir(cliArg(args, "--out"), process.env.SCORM_OUTPUT_DIR);
+        await startUi({ port, outDir, version: SERVER_VERSION });
+        const url = "http://127.0.0.1:" + port;
+        console.log("SCORM Packager UI: " + url + "  (packages land in " + outDir + ")");
+        // best-effort: open the default browser (mac/win/linux), never fail on error
+        try {
+            const { exec } = await import("node:child_process");
+            const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+            exec(opener + " " + url, () => { });
+        }
+        catch { /* user can click the printed URL */ }
+        return new Promise(() => { }); // serve until Ctrl-C
+    }
+    if (cmd === "selftest") {
+        const t0 = Date.now();
+        const outDir = resolveOutputDir(cliArg(args, "--out"), process.env.SCORM_OUTPUT_DIR);
+        await fs.mkdir(outDir, { recursive: true });
+        const result = await buildPackage({ html: SELFTEST_HTML, title: "Selftest" });
+        await fs.writeFile(path.join(outDir, result.fileName), result.zip);
+        console.log("Selftest OK — v" + SERVER_VERSION + ", " + (Date.now() - t0) + " ms, " + result.schemasBundled + " XSD, output: " + path.join(outDir, result.fileName));
+        return 0;
+    }
+    if (cmd !== "pack") {
+        console.log(CLI_HELP);
+        return cmd && cmd !== "--help" && cmd !== "-h" ? 1 : 0;
+    }
+    // <input> = first token that is neither an option nor an option's value
+    const VALUED = new Set(["--title", "--out", "--scorm-version", "--mastery", "--language"]);
+    let input;
+    for (let i = 0; i < args.length; i++) {
+        if (args[i].startsWith("--")) {
+            if (VALUED.has(args[i])) {
+                i++;
+            }
+            continue;
+        }
+        input = args[i];
+        break;
+    }
+    if (!input) {
+        console.error("pack: missing <input>\n");
+        console.log(CLI_HELP);
+        return 1;
+    }
+    const outDir = resolveOutputDir(cliArg(args, "--out"), process.env.SCORM_OUTPUT_DIR);
+    await fs.mkdir(outDir, { recursive: true });
+    const common = {
+        language: cliArg(args, "--language") ?? "fr-FR",
+        autoMilestones: !args.includes("--no-auto-milestones"),
+        successOnCompletion: args.includes("--success-on-completion"),
+        masteryScore: cliArg(args, "--mastery") !== undefined ? Number(cliArg(args, "--mastery")) : undefined,
+        scormVersion: (cliArg(args, "--scorm-version") === "1.2" ? "1.2" : "2004"),
+    };
+    if (args.includes("--batch")) {
+        const report = await packBatch({ input_path: input, title: cliArg(args, "--title"), scorm_version: common.scormVersion, mastery_score: common.masteryScore, language: common.language, auto_milestones: common.autoMilestones, success_on_completion: common.successOnCompletion }, outDir);
+        for (const r of report.succeeded) {
+            console.log(" ✓ " + r.course + " → " + r.output_path);
+        }
+        for (const f of report.failed) {
+            console.error(" ✗ " + f.course + " : " + f.error);
+        }
+        console.log(report.succeeded.length + "/" + report.total + " packages — report: " + report.report_path);
+        return report.failed.length ? 1 : 0;
+    }
+    const title = cliArg(args, "--title") ?? titleFromEntry(path.basename(input));
+    const result = await buildPackage({ inputPath: input, title, ...common });
+    const outputPath = path.join(outDir, result.fileName);
+    await fs.writeFile(outputPath, result.zip);
+    console.log("SCORM " + (result.scormVersion === "1.2" ? "1.2" : "2004") + " package: " + outputPath);
+    if (result.warnings.length) {
+        for (const w of result.warnings) {
+            console.error(" ! " + w);
+        }
+    }
+    return 0;
+}
 async function main() {
+    const sub = process.argv[2];
+    if (sub === "pack" || sub === "selftest" || sub === "ui" || sub === "--help" || sub === "-h") {
+        process.exit(await runCli(process.argv.slice(2)));
+    }
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error("scorm-mcp-server running on stdio");
