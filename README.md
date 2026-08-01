@@ -2,6 +2,7 @@
 
 > Turn self-contained HTML **or a Claude Design `.dc` bundle** into a **SCORM 2004 (or 1.2)** package ready to import into any LMS — assets inlined for **100% offline**, completion / progress / **score** tracking injected, ADL schemas bundled.
 
+[![Try it online](https://img.shields.io/badge/demo-try%20online-0066cc)](https://scorm-packager-peach.vercel.app)
 [![npm](https://img.shields.io/npm/v/scorm-mcp-server?logo=npm&color=cb3837)](https://www.npmjs.com/package/scorm-mcp-server)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)
@@ -91,6 +92,12 @@ and reports version, duration and output path: it separates "server broken"
 from "input problem" in one second.
 
 ## Install
+
+### Option 0 — try it online, no install
+**[https://scorm-packager-peach.vercel.app](https://scorm-packager-peach.vercel.app)** — drop a course, pick the SCORM edition, download the package.
+Files are processed in memory and never stored, but they do travel to a server;
+for real work use the local options below, where nothing leaves your machine
+(and there is no 4 MB limit).
 
 ### Option A — one-click (recommended)
 Download **`scorm-mcp-server-x.y.z.mcpb`** from the [Releases](../../releases), then in **Claude Desktop → Settings → Extensions**, drag-drop the `.mcpb`, pick an output folder, and enable it.
