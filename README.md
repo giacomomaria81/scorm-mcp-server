@@ -1,6 +1,6 @@
 # scorm-mcp-server
 
-> Turn self-contained HTML **or a Claude Design `.dc` bundle** into a **SCORM 2004 (or 1.2)** package ready to import into any LMS — assets inlined for **100% offline**, completion / progress / **score** tracking injected, ADL schemas bundled.
+> Turn self-contained HTML, **a Claude Design `.dc` bundle** or **a Teach on Mars content export** into a **SCORM 2004 (or 1.2)** package ready to import into any LMS — assets inlined for **100% offline**, completion / progress / **score** tracking injected, ADL schemas bundled.
 
 [![Try it online](https://img.shields.io/badge/demo-try%20online-0066cc)](https://scorm-packager-peach.vercel.app)
 [![npm](https://img.shields.io/npm/v/scorm-mcp-server?logo=npm&color=cb3837)](https://www.npmjs.com/package/scorm-mcp-server)
@@ -8,7 +8,7 @@
 ![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)
 ![SCORM](https://img.shields.io/badge/SCORM-2004%20%2B%201.2-0a66c2)
 ![MCP](https://img.shields.io/badge/MCP-server-6E56CF)
-![Tests](https://img.shields.io/badge/tests-212%2F212%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-256%2F256%20passing-brightgreen)
 ![Validated](https://img.shields.io/badge/SCORM%20Cloud-validated-success)
 
 ![SCORM test harness demo](./assets/demo.gif)
@@ -27,7 +27,7 @@ An **MCP server** exposing a single tool, **`scorm_package`**, that converts a f
 
 ## ✅ Status — validated on a real LMS
 
-- **212/212 automated checks** green: 23 converter · 15 runtime · 14 MCP · 1 schema conformance (`xmllint`) · 6 security · 11 features · 13 auto-milestones · 21 V2 (bundle / `.dc` / score) · 10 output-dir · 9 tracking-signal · 32 hardening · 29 SCORM 1.2 · 12 CLI/batch · 16 web UI — plus 6 bonus strict-runtime checks (`scorm-again`).
+- **256/256 automated checks** green: 23 converter · 15 runtime · 14 MCP · 1 schema conformance (`xmllint`) · 6 security · 11 features · 13 auto-milestones · 21 V2 (bundle / `.dc` / score) · 10 output-dir · 9 tracking-signal · 32 hardening · 29 SCORM 1.2 · 12 CLI/batch · 16 web UI · **44 Teach on Mars migration** — plus 6 bonus strict-runtime checks (`scorm-again`).
 - **SCORM Cloud (real LMS):** imports cleanly (recognized as *SCORM 2004 4th Ed.*, "manifest looks great"), and the dashboard reports **completion = complete, success = passed, time tracked**.
 
 ## Input formats
@@ -37,6 +37,7 @@ An **MCP server** exposing a single tool, **`scorm_package`**, that converts a f
 | A single self-contained `.html` (e.g. Claude Design "standalone HTML" export) | assets inlined, runtime injected — v1 path |
 | A **folder or `.zip`** (multi-file module) | whole tree preserved; entry HTML inlined; manifest lists every file |
 | A **Claude Design `.dc` bundle** (`*.dc.html` + `support.js` + `_ds/`) | auto-detected; CDN libs (React/Babel…) **vendored offline** via `window.__resources` (no source patch); runtime injected before `support.js` |
+| A **Teach on Mars content export** (Excel activity templates + `media/`) | auto-detected; an interactive HTML course is **rebuilt from the templates** — Mobile Course cards (info / transition / flash), Quiz Game questions, media codes (`[media:…]`, `[H1:…]`, `[quote:…]`, `!!`), scored quizzes reporting `cmi.score` — then packaged. Course title derived from the template names; with `--batch`, a whole catalogue migrates in one run |
 
 Pass a `.dc` bundle as its **folder or `.zip`** (not the lone `.dc.html`, which is inert without its siblings).
 

@@ -1,10 +1,10 @@
 {
   "manifest_version": "0.3",
   "name": "scorm-mcp-server",
-  "display_name": "SCORM Packager (HTML → SCORM 2004)",
-  "version": "2.1.0",
-  "description": "Convertit un HTML autonome OU un bundle Claude Design (.dc) en paquet SCORM 2004 prêt pour n'importe quel LMS : assets offline, suivi complétion/progression/score, schémas ADL embarqués.",
-  "long_description": "Serveur MCP exposant un outil `scorm_package`. Principe : WRAP, don't rewrite — le HTML est conservé, on inline les assets en data-URI pour l'offline, on injecte un runtime SCORM 2004 (découverte d'API robuste, complétion/progression via jalons déclaratifs `data-jalon`/`data-trigger`, reprise via suspend_data), on génère le manifeste et on embarque les 15 XSD ADL. Validé sur un vrai LMS (SCORM Cloud) : import OK, completion=complete, success=passed, temps suivi.",
+  "display_name": "SCORM Packager (HTML → SCORM 2004 / 1.2)",
+  "version": "2.2.0",
+  "description": "Turn a self-contained HTML file, a Claude Design (.dc) bundle OR a Teach on Mars content export into a SCORM package any LMS can import — SCORM 2004 4th Ed. or 1.2, assets embedded for offline use, completion/progress/score tracking injected, official ADL schemas bundled and validated.",
+  "long_description": "MCP server exposing two tools: `scorm_package` and `scorm_selftest`.\n\nPrinciple: WRAP, don't rewrite. Your HTML is preserved byte for byte; the tool only (1) embeds every asset as a data URI so the course runs with no network at all, (2) injects a small runtime that reports completion, progress, time spent and quiz score back to the LMS and resumes where the learner left off, and (3) generates the manifest and bundles the official ADL XSD schemas, validating against them.\n\nSCORM 2004 4th Edition by default, or SCORM 1.2 for legacy LMSs — the injected runtime is adaptive and speaks whichever API the hosting platform exposes.\n\nMIGRATION: a Teach on Mars content export (Excel activity templates + media) is rebuilt into an interactive HTML course automatically — info/transition/flash cards, scored quizzes reporting cmi.score, media embedded — then packaged. With batch mode, a whole catalogue migrates in one call.\n\nProgress needs no preparation: if your HTML declares no milestone, they are auto-generated from the document structure. For finer control, mark steps with data-jalon / data-trigger, or call window.SCORM2004.reach() and .score() from your own code.\n\nAlso available outside Claude: `npx scorm-mcp-server ui` opens a local drag-and-drop page, `pack` packages from the command line (with a --batch mode for whole course catalogues), and buildPackage() is a documented library API.\n\nRuns entirely on your machine: no account, no telemetry, no data collection. Validated end to end on SCORM Cloud (completion, success and score all reported). 256 automated checks. Try it online first: https://scorm-packager-peach.vercel.app",
   "author": {
     "name": "Giacomo Pilia"
   },
@@ -25,22 +25,26 @@
   "tools": [
     {
       "name": "scorm_package",
-      "description": "Empaquette un HTML autonome en SCORM 2004 4e édition (.zip), prêt à importer dans un LMS."
+      "description": "Package a self-contained HTML file, a folder, a .zip, a Claude Design .dc bundle or a Teach on Mars content export as a SCORM 2004 (or 1.2) course. Supports batch packaging of a whole directory."
     },
     {
       "name": "scorm_selftest",
-      "description": "Diagnostic sans argument : package un HTML constant et rend version/duree/chemin."
+      "description": "No-argument diagnostic: packages a built-in constant HTML and reports version, duration and output path."
     }
   ],
   "tools_generated": false,
   "keywords": [
     "scorm",
     "scorm 2004",
+    "scorm 1.2",
     "e-learning",
     "lms",
     "converter",
     "claude design",
-    "offline"
+    "teach on mars",
+    "migration",
+    "offline",
+    "moodle"
   ],
   "license": "MIT",
   "compatibility": {
@@ -57,10 +61,17 @@
   "user_config": {
     "output_dir": {
       "type": "directory",
-      "title": "Dossier de sortie des paquets SCORM",
-      "description": "Où écrire les fichiers .zip générés (par défaut ~/scorm-packages).",
+      "title": "Output folder for SCORM packages",
+      "description": "Where the generated .zip files are written (default: ~/scorm-packages).",
       "required": false,
       "default": "${HOME}/scorm-packages"
     }
+  },
+  "homepage": "https://scorm-packager-peach.vercel.app",
+  "documentation": "https://github.com/giacomomaria81/scorm-mcp-server#readme",
+  "support": "https://github.com/giacomomaria81/scorm-mcp-server/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/giacomomaria81/scorm-mcp-server.git"
   }
 }

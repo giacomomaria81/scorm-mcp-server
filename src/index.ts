@@ -27,7 +27,7 @@ import { buildPackage } from "./converter.js";
 export { buildPackage } from "./converter.js";
 export type { BuildOptions, BuildResult } from "./converter.js";
 
-const SERVER_VERSION = "2.1.0";
+const SERVER_VERSION = "2.2.0";
 
 const server = new McpServer({
   name: "scorm-mcp-server",
@@ -83,7 +83,8 @@ const InputShape = {
     .string()
     .min(1, "title must not be empty")
     .max(250)
-    .describe("Course / module title. Used as the manifest, organization and item title shown in the LMS."),
+    .optional()
+    .describe("Course / module title, used as the manifest, organization and item title shown in the LMS. Required for HTML inputs; optional for a Teach on Mars export, where it is derived from the template file names."),
   language: z
     .string()
     .optional()
@@ -135,10 +136,12 @@ const InputShape = {
 server.registerTool(
   "scorm_package",
   {
-    title: "Package HTML as SCORM 2004",
-    description: `Convert a self-contained HTML document into a SCORM 2004 4th Edition package (.zip).
+    title: "Package HTML as SCORM (2004 or 1.2)",
+    description: `Convert a self-contained HTML document, a folder, a .zip, a Claude Design (.dc) bundle OR a Teach on Mars content export into a SCORM package (.zip) — SCORM 2004 4th Edition by default, or SCORM 1.2 for legacy LMSs.
 
 Use this to turn a finished learning module (for example HTML produced by Claude Design) into a file that any SCORM-compliant LMS can import. The conversion is faithful: the HTML is preserved, external assets are inlined as data URIs so the package runs 100% offline, and a small runtime is injected to report completion and progress.
+
+TEACH ON MARS MIGRATION: if the input zip/folder contains Teach on Mars Excel activity templates (Mobile Course, Quiz Game...) plus a media folder — the format produced by the platform's content export — the tool rebuilds an interactive HTML course from them (info/transition/flash cards, scored quizzes reporting cmi.score, media embedded, TOM layout codes rendered) and packages it. No title needed: it is derived from the template file names. Combined with batch mode this migrates a whole course catalogue in one call.
 
 PROGRESS / COMPLETION MODEL (milestones):
 The author can mark meaningful steps with data-jalon + optional data-trigger:
@@ -151,19 +154,22 @@ The runtime reports cmi.progress_measure = milestones_reached / total, and sets 
 Args:
   - html (string, optional): HTML content. Provide this OR input_path.
   - input_path (string, optional): path to an HTML file on disk. Provide this OR html.
-  - title (string, required): course/module title shown in the LMS.
+  - title (string): course/module title shown in the LMS. Required for HTML inputs; optional for a Teach on Mars export (derived from the templates).
   - language (string, optional): BCP-47 tag, default 'fr-FR'.
   - identifier (string, optional): manifest id; auto-generated from title if omitted.
   - base_url (string, optional): base URL for resolving relative asset paths over the network.
   - output_dir (string, optional): where to write the .zip. Default: $SCORM_OUTPUT_DIR or ~/scorm-packages.
   - auto_milestones (boolean, optional, default true): auto-generate milestones when none are declared.
   - success_on_completion (boolean, optional, default false): also set cmi.success_status='passed' on completion.
+  - scorm_version ('2004' or '1.2', optional, default '2004'): SCORM edition of the package. Choose '1.2' for older LMSs that reject 2004. The injected runtime is adaptive and works with both LMS APIs either way; this controls the manifest and bundled schemas.
+  - mastery_score (number 0..1, optional): pass threshold; enables score-based success.
+  - batch (boolean, optional): treat input_path as a DIRECTORY of courses (each sub-directory, .zip or .html = one course). Produces one package per course plus a consolidated batch-report.json; a broken course never blocks the others. The title argument becomes a prefix.
 
 Returns JSON:
   {
     "output_path": string,        // absolute path to the generated .zip
     "file_name": string,
-    "scorm_version": "2004 4th Edition",
+    "scorm_version": "2004 4th Edition" or "1.2",
     "milestone_count": number,    // milestones in the package
     "milestone_ids": string[],
     "milestones_auto": boolean,   // true if they were auto-generated
@@ -376,13 +382,17 @@ server.registerTool(
 // CLI: `scorm-mcp-server pack <input> [options]` — no MCP client required
 // --------------------------------------------------------------------------
 
-const CLI_HELP = `scorm-mcp-server — HTML / Claude Design -> SCORM packager
+const CLI_HELP = `scorm-mcp-server — HTML / Claude Design / Teach on Mars -> SCORM packager
 
 Usage:
   scorm-mcp-server                      start the MCP server (stdio)
   scorm-mcp-server ui [--port 3117]     open the local drag & drop web UI
   scorm-mcp-server pack <input> [opts]  package a file/folder/zip from the CLI
   scorm-mcp-server selftest             build a constant test package
+
+Inputs: a self-contained .html, a folder or .zip bundle, a Claude Design .dc
+bundle, or a Teach on Mars content export (Excel activity templates + media —
+rebuilt into an interactive HTML course automatically).
 
 Options for pack:
   --title <t>          course title (default: derived from the file name)

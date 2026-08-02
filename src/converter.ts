@@ -20,12 +20,14 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { SCORM_RUNTIME } from "./runtime.js";
+import { isTomExport, parseTomExport, buildMediaIndex, renderTomCourseHtml } from "./tom.js";
 
 export interface BuildOptions {
   html?: string;
   inputPath?: string;
   baseUrl?: string;
-  title: string;
+  /** Course title. Required for HTML inputs; optional for a Teach on Mars export (derived from the templates). */
+  title?: string;
   identifier?: string;
   language?: string;
   /** Auto-generate 'view' milestones from document structure when none declared. Default: true. */
@@ -49,6 +51,8 @@ export interface BuildOptions {
 export interface BuildResult {
   zip: Buffer;
   fileName: string;
+  /** Final course title (may have been derived from a Teach on Mars export). */
+  title: string;
   milestoneCount: number;
   milestoneIds: string[];
   warnings: string[];
@@ -660,7 +664,7 @@ async function bundleSchemas(zip: JSZip, ctx: Ctx, scormVersion: "2004" | "1.2" 
 // v2: bundle input (.zip / directory) + Claude Design pipeline
 // --------------------------------------------------------------------------
 
-interface Bundle { root: string; files: string[]; entryRel: string; cleanup: boolean }
+interface Bundle { root: string; files: string[]; entryRel: string; cleanup: boolean; warnings?: string[]; suggestedTitle?: string }
 
 const SKIP_FILES = new Set([".ds_store", "thumbs.db", ".thumbnail"]);
 function keepBundleFile(rel: string): boolean {
@@ -697,11 +701,55 @@ function pickEntry(files: string[]): string {
   throw new Error("Bundle: no entry HTML found (expected a .dc.html, an index.html, or a single .html file).");
 }
 
+/**
+ * Teach on Mars export (xlsx templates + media, no HTML): generate the course
+ * page in `root`, drop the xlsx from the shipped file list, keep the media.
+ */
+async function tomBundle(root: string, files: string[], cleanup: boolean, fallbackTitle: string): Promise<Bundle> {
+  const course = await parseTomExport(files, (rel) => fs.readFile(path.join(root, rel)), fallbackTitle);
+  if (course.activities.length === 0) {
+    if (cleanup) { await fs.rm(root, { recursive: true, force: true }).catch(() => {}); }
+    throw new Error(
+      "Teach on Mars export detected (xlsx templates, no HTML) but no readable activity was found. " +
+      "Expected activity templates with a Cards sheet (Mobile Course or Quiz Game). " +
+      (course.warnings.length ? "Details: " + course.warnings.join(" | ") : ""),
+    );
+  }
+  const mediaIndex = buildMediaIndex(files);
+  const html = renderTomCourseHtml(course, mediaIndex);
+  await fs.writeFile(path.join(root, "index.html"), html, "utf8");
+  const shipped = files.filter((f) => !/\.xlsx$/i.test(f)); // templates stay out of the package
+  const warnings = [
+    `Export Teach on Mars détecté : ${course.activities.length} activité(s) reconstruite(s) en HTML interactif` +
+    ` (« ${course.title} »).`,
+    ...course.warnings,
+  ];
+  return { root, files: [...shipped, "index.html"], entryRel: "index.html", cleanup, warnings, suggestedTitle: course.title };
+}
+
 async function loadBundle(inputPath: string): Promise<Bundle> {
   const st = await fs.stat(inputPath);
+  const fallbackTitle = path.basename(inputPath).replace(/\.zip$/i, "") || "Course";
   if (st.isDirectory()) {
-    const files = await walkDir(path.resolve(inputPath));
-    return { root: path.resolve(inputPath), files, entryRel: pickEntry(files), cleanup: false };
+    const src = path.resolve(inputPath);
+    const files = await walkDir(src);
+    if (isTomExport(files)) {
+      // copy to a temp dir first: the generated index.html must never be
+      // written into the user's own folder.
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "scorm-tom-"));
+      try {
+        for (const rel of files) {
+          const dest = path.join(root, rel);
+          await fs.mkdir(path.dirname(dest), { recursive: true });
+          await fs.copyFile(path.join(src, rel), dest);
+        }
+        return await tomBundle(root, files, true, fallbackTitle);
+      } catch (e) {
+        await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+        throw e;
+      }
+    }
+    return { root: src, files, entryRel: pickEntry(files), cleanup: false };
   }
   // .zip: extract to a temp dir (with zip-slip guard)
   const buf = await fs.readFile(inputPath);
@@ -718,6 +766,7 @@ async function loadBundle(inputPath: string): Promise<Bundle> {
   }
   try {
     const files = await walkDir(root);
+    if (isTomExport(files)) { return await tomBundle(root, files, true, fallbackTitle); }
     return { root, files, entryRel: pickEntry(files), cleanup: true };
   } catch (e) {
     // pickEntry throws on a zip with no HTML entry; without this cleanup the
@@ -788,9 +837,26 @@ function injectIntoDcHtml(html: string, injection: string): string {
 export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
   const ctx: Ctx = { warnings: [], bytes: 0, cache: new Map(), baseUrl: opts.baseUrl, baseDir: undefined };
 
-  const title = opts.title?.trim();
-  if (!title) { throw new Error("`title` is required (used as the course and item title in the manifest)."); }
+  let title = opts.title?.trim();
+  // A Teach on Mars export carries its own course title (derived from the
+  // template file names) — the explicit-title requirement is checked after
+  // bundle detection so that case can self-title.
   const language = opts.language?.trim() || "fr-FR";
+  const mastery = typeof opts.masteryScore === "number" && opts.masteryScore >= 0 && opts.masteryScore <= 1 ? opts.masteryScore : undefined;
+  const scormVersion: "2004" | "1.2" = opts.scormVersion === "1.2" ? "1.2" : "2004";
+  const fileSuffix = scormVersion === "1.2" ? "-scorm12.zip" : "-scorm2004.zip";
+
+  // Detect a bundle input (directory or .zip on disk).
+  let bundle: Bundle | null = null;
+  if (opts.inputPath) {
+    const st = await fs.stat(opts.inputPath).catch(() => null);
+    if (st && (st.isDirectory() || /\.zip$/i.test(opts.inputPath))) { bundle = await loadBundle(opts.inputPath); }
+  }
+  if (!title && bundle?.suggestedTitle) { title = bundle.suggestedTitle; }
+  if (!title) {
+    if (bundle?.cleanup) { await fs.rm(bundle.root, { recursive: true, force: true }).catch(() => {}); }
+    throw new Error("`title` is required (used as the course and item title in the manifest).");
+  }
   // A manifest identifier is an xs:ID (NCName): no spaces, no leading digit.
   // "mon cours 2024" would produce valid-looking XML that strict LMS importers
   // (SCORM Cloud included) reject. Fall back to a conformant generated id.
@@ -802,19 +868,10 @@ export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
     identifier = "COURSE-" + slugify(rawId || title).toUpperCase();
     if (rawId) { ctx.warnings.push("`identifier` fourni non conforme xs:ID (« " + rawId + " ») — remplacé par « " + identifier + " »."); }
   }
-  const mastery = typeof opts.masteryScore === "number" && opts.masteryScore >= 0 && opts.masteryScore <= 1 ? opts.masteryScore : undefined;
-  const scormVersion: "2004" | "1.2" = opts.scormVersion === "1.2" ? "1.2" : "2004";
-  const fileSuffix = scormVersion === "1.2" ? "-scorm12.zip" : "-scorm2004.zip";
-
-  // Detect a bundle input (directory or .zip on disk).
-  let bundle: Bundle | null = null;
-  if (opts.inputPath) {
-    const st = await fs.stat(opts.inputPath).catch(() => null);
-    if (st && (st.isDirectory() || /\.zip$/i.test(opts.inputPath))) { bundle = await loadBundle(opts.inputPath); }
-  }
 
   // ---------- Path A: multi-file bundle (Claude Design .dc or generic) ----------
   if (bundle) {
+    if (bundle.warnings) { ctx.warnings.push(...bundle.warnings); }
     try {
       const entryAbs = path.join(bundle.root, bundle.entryRel);
       const entryHtml = await fs.readFile(entryAbs, "utf8");
@@ -869,7 +926,7 @@ export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
         const zipBuffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
         if (ctx.bytes > MAX_TOTAL_BYTES) { ctx.warnings.push("Paquet volumineux (~" + Math.round(ctx.bytes / 1024 / 1024) + " Mo)."); }
         return {
-          zip: zipBuffer, fileName: slugify(title) + fileSuffix,
+          zip: zipBuffer, fileName: slugify(title) + fileSuffix, title,
           milestoneCount: 0, milestoneIds: [], warnings: ctx.warnings, inlinedBytes: ctx.bytes,
           schemasBundled, milestonesAuto: false, format: "claude-design",
           filesCount: bundle.files.length + vendorFiles.size, vendored, scormVersion,
@@ -891,7 +948,7 @@ export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
       const schemasBundled = await bundleSchemas(zip, ctx, scormVersion);
       const zipBuffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
       return {
-        zip: zipBuffer, fileName: slugify(title) + fileSuffix,
+        zip: zipBuffer, fileName: slugify(title) + fileSuffix, title,
         milestoneCount: milestoneIds.length, milestoneIds, warnings: ctx.warnings, inlinedBytes: ctx.bytes,
         schemasBundled, milestonesAuto, format: "html", filesCount: bundle.files.length, vendored: [], scormVersion,
       };
@@ -946,7 +1003,7 @@ export async function buildPackage(opts: BuildOptions): Promise<BuildResult> {
   const schemasBundled = await bundleSchemas(zip, ctx, scormVersion);
   const zipBuffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
   return {
-    zip: zipBuffer, fileName: slugify(title) + fileSuffix,
+    zip: zipBuffer, fileName: slugify(title) + fileSuffix, title,
     milestoneCount: milestoneIds.length, milestoneIds, warnings: ctx.warnings, inlinedBytes: ctx.bytes,
     schemasBundled, milestonesAuto, format: "html", filesCount: 1, vendored: [], scormVersion,
   };
