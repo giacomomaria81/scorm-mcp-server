@@ -1,7 +1,7 @@
 {
   "name": "scorm-mcp-server",
-  "version": "2.2.0",
-  "description": "MCP server: turn self-contained HTML, a Claude Design (.dc) bundle or a Teach on Mars content export into a SCORM 2004/1.2 package any LMS can import — offline assets, milestone/score tracking, bundled ADL schemas.",
+  "version": "2.2.1",
+  "description": "MCP server: turn self-contained HTML, a Claude Design (.dc) bundle or a mobile-learning platform content export into a SCORM 2004/1.2 package any LMS can import — offline assets, milestone/score tracking, bundled ADL schemas.",
   "mcpName": "io.github.giacomomaria81/scorm-mcp-server",
   "type": "module",
   "bin": {

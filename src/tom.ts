@@ -1,13 +1,13 @@
 /**
- * Teach on Mars export → HTML course bundle.
+ * Mobile-learning Excel export → HTML course bundle.
  *
- * A Teach on Mars "content export" is a zip (or folder) of Excel templates —
+ * A mobile-learning platform "content export" is a zip (or folder) of Excel templates —
  * one .xlsx per activity, named "Course - Activity - LANG.xlsx" — plus a
  * media/ folder. There is no HTML inside. This module turns that export into
  * a self-contained interactive HTML course that the regular SCORM pipeline
  * (bundle path of buildPackage) can then wrap.
  *
- * Template structure (documented in the TOM Help Center):
+ * Template structure (as documented by the source platform):
  *   - every template has 3 tabs: Instructions / Configuration / Cards
  *   - Mobile Course "Cards": column A = card type (Info | Transition | Quiz | Flash)
  *       Info:       B front title, E front text
@@ -488,7 +488,7 @@ export function renderTomCourseHtml(course: TomCourse, mediaIndex: Map<string, s
   <p class="course-sub">${course.activities.length} ${course.activities.length > 1 ? "activities" : "activity"}${quizCount ? ` - ${quizCount} scored ${quizCount > 1 ? "questions" : "question"}` : ""}</p>
   ${sections.join("\n")}
   <div class="score-banner" id="score-banner"><span id="score-text"></span></div>
-  <footer>Converted from a Teach on Mars content export.</footer>
+  <footer>Converted from a mobile-learning content export.</footer>
 </main>
 <script>
 (function () {

@@ -312,7 +312,7 @@ const PAGE = (version) => `<!DOCTYPE html>
 
   <div class="drop" id="drop" role="button" tabindex="0" aria-label="Choose a file">
     <div class="lead">Drop your course here, or <span class="browse">browse</span></div>
-    <div class="hint">.html &middot; .zip (bundle, Claude Design .dc, or a Teach on Mars content export)</div>
+    <div class="hint">.html &middot; .zip (bundle, Claude Design .dc, or a mobile-learning Excel export)</div>
   </div>
   <div class="filechip" id="chip">
     <span class="fname" id="fname"></span>

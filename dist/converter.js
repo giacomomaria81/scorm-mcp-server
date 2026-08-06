@@ -730,7 +730,7 @@ function pickEntry(files) {
     throw new Error("Bundle: no entry HTML found (expected a .dc.html, an index.html, or a single .html file).");
 }
 /**
- * Teach on Mars export (xlsx templates + media, no HTML): generate the course
+ * Mobile-learning Excel export (xlsx templates + media, no HTML): generate the course
  * page in `root`, drop the xlsx from the shipped file list, keep the media.
  */
 async function tomBundle(root, files, cleanup, fallbackTitle) {
@@ -739,7 +739,7 @@ async function tomBundle(root, files, cleanup, fallbackTitle) {
         if (cleanup) {
             await fs.rm(root, { recursive: true, force: true }).catch(() => { });
         }
-        throw new Error("Teach on Mars export detected (xlsx templates, no HTML) but no readable activity was found. " +
+        throw new Error("Mobile-learning Excel export detected (activity templates, no HTML) but no readable activity was found. " +
             "Expected activity templates with a Cards sheet (Mobile Course or Quiz Game). " +
             (course.warnings.length ? "Details: " + course.warnings.join(" | ") : ""));
     }
@@ -748,7 +748,7 @@ async function tomBundle(root, files, cleanup, fallbackTitle) {
     await fs.writeFile(path.join(root, "index.html"), html, "utf8");
     const shipped = files.filter((f) => !/\.xlsx$/i.test(f)); // templates stay out of the package
     const warnings = [
-        `Export Teach on Mars détecté : ${course.activities.length} activité(s) reconstruite(s) en HTML interactif` +
+        `Export mobile-learning (templates Excel) détecté : ${course.activities.length} activité(s) reconstruite(s) en HTML interactif` +
             ` (« ${course.title} »).`,
         ...course.warnings,
     ];
@@ -876,7 +876,7 @@ function injectIntoDcHtml(html, injection) {
 export async function buildPackage(opts) {
     const ctx = { warnings: [], bytes: 0, cache: new Map(), baseUrl: opts.baseUrl, baseDir: undefined };
     let title = opts.title?.trim();
-    // A Teach on Mars export carries its own course title (derived from the
+    // A mobile-learning Excel export carries its own course title (derived from the
     // template file names) — the explicit-title requirement is checked after
     // bundle detection so that case can self-title.
     const language = opts.language?.trim() || "fr-FR";

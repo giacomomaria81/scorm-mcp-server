@@ -24,7 +24,7 @@ import { buildPackage } from "./converter.js";
 // Public library API: lets pipelines/backends do
 //   import { buildPackage } from "scorm-mcp-server";
 export { buildPackage } from "./converter.js";
-const SERVER_VERSION = "2.2.0";
+const SERVER_VERSION = "2.2.1";
 const server = new McpServer({
     name: "scorm-mcp-server",
     version: SERVER_VERSION,
@@ -77,7 +77,7 @@ const InputShape = {
         .min(1, "title must not be empty")
         .max(250)
         .optional()
-        .describe("Course / module title, used as the manifest, organization and item title shown in the LMS. Required for HTML inputs; optional for a Teach on Mars export, where it is derived from the template file names."),
+        .describe("Course / module title, used as the manifest, organization and item title shown in the LMS. Required for HTML inputs; optional for a mobile-learning Excel export, where it is derived from the template file names."),
     language: z
         .string()
         .optional()
@@ -127,11 +127,11 @@ const InputShape = {
 };
 server.registerTool("scorm_package", {
     title: "Package HTML as SCORM (2004 or 1.2)",
-    description: `Convert a self-contained HTML document, a folder, a .zip, a Claude Design (.dc) bundle OR a Teach on Mars content export into a SCORM package (.zip) — SCORM 2004 4th Edition by default, or SCORM 1.2 for legacy LMSs.
+    description: `Convert a self-contained HTML document, a folder, a .zip, a Claude Design (.dc) bundle OR a mobile-learning platform content export (Excel activity templates + media) into a SCORM package (.zip) — SCORM 2004 4th Edition by default, or SCORM 1.2 for legacy LMSs.
 
 Use this to turn a finished learning module (for example HTML produced by Claude Design) into a file that any SCORM-compliant LMS can import. The conversion is faithful: the HTML is preserved, external assets are inlined as data URIs so the package runs 100% offline, and a small runtime is injected to report completion and progress.
 
-TEACH ON MARS MIGRATION: if the input zip/folder contains Teach on Mars Excel activity templates (Mobile Course, Quiz Game...) plus a media folder — the format produced by the platform's content export — the tool rebuilds an interactive HTML course from them (info/transition/flash cards, scored quizzes reporting cmi.score, media embedded, TOM layout codes rendered) and packages it. No title needed: it is derived from the template file names. Combined with batch mode this migrates a whole course catalogue in one call.
+MIGRATION FROM MOBILE-LEARNING PLATFORMS: if the input zip/folder contains Excel activity templates (mobile course cards, quiz games...) plus a media folder — the format produced by the platform's content export — the tool rebuilds an interactive HTML course from them (info/transition/flash cards, scored quizzes reporting cmi.score, media embedded, the platform's layout codes rendered) and packages it. No title needed: it is derived from the template file names. Combined with batch mode this migrates a whole course catalogue in one call.
 
 PROGRESS / COMPLETION MODEL (milestones):
 The author can mark meaningful steps with data-jalon + optional data-trigger:
@@ -144,7 +144,7 @@ The runtime reports cmi.progress_measure = milestones_reached / total, and sets 
 Args:
   - html (string, optional): HTML content. Provide this OR input_path.
   - input_path (string, optional): path to an HTML file on disk. Provide this OR html.
-  - title (string): course/module title shown in the LMS. Required for HTML inputs; optional for a Teach on Mars export (derived from the templates).
+  - title (string): course/module title shown in the LMS. Required for HTML inputs; optional for a mobile-learning Excel export (derived from the templates).
   - language (string, optional): BCP-47 tag, default 'fr-FR'.
   - identifier (string, optional): manifest id; auto-generated from title if omitted.
   - base_url (string, optional): base URL for resolving relative asset paths over the network.
@@ -344,7 +344,7 @@ server.registerTool("scorm_selftest", {
 // --------------------------------------------------------------------------
 // CLI: `scorm-mcp-server pack <input> [options]` — no MCP client required
 // --------------------------------------------------------------------------
-const CLI_HELP = `scorm-mcp-server — HTML / Claude Design / Teach on Mars -> SCORM packager
+const CLI_HELP = `scorm-mcp-server — HTML / Claude Design / mobile-learning exports -> SCORM packager
 
 Usage:
   scorm-mcp-server                      start the MCP server (stdio)
@@ -353,7 +353,7 @@ Usage:
   scorm-mcp-server selftest             build a constant test package
 
 Inputs: a self-contained .html, a folder or .zip bundle, a Claude Design .dc
-bundle, or a Teach on Mars content export (Excel activity templates + media —
+bundle, or a mobile-learning platform content export (Excel activity templates + media —
 rebuilt into an interactive HTML course automatically).
 
 Options for pack:

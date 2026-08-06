@@ -1,7 +1,7 @@
 /**
- * Teach on Mars export support (2.2.0).
+ * Mobile-learning Excel export support (2.2.x).
  *
- * Builds a synthetic TOM export (real .xlsx files fabricated as OOXML zips,
+ * Builds a synthetic mobile-learning export (real .xlsx files fabricated as OOXML zips,
  * exactly like Excel writes them: sharedStrings for one template, inline
  * strings for the other) and runs the WHOLE pipeline: detection → xlsx
  * parsing → HTML course generation → SCORM package → xmllint validation →
@@ -195,7 +195,7 @@ let pkgHtml = "";
   check("media shipped", names.includes("media/logo.png"));
   check("xlsx templates NOT shipped", !names.some((n) => n.endsWith(".xlsx")));
   check("manifest present", names.includes("imsmanifest.xml"));
-  check("TOM warning surfaced", r.warnings.some((w) => w.includes("Teach on Mars")));
+  check("migration warning surfaced", r.warnings.some((w) => w.includes("Export mobile-learning")));
   pkgHtml = await zip.file("index.html").async("string");
   check("both activities in page", pkgHtml.includes("Welcome to retail") && pkgHtml.includes("What is 2 + 2?"));
   check("3 quiz questions total", (pkgHtml.match(/class="card quiz"/g) || []).length === 3);
@@ -299,7 +299,7 @@ console.log("6 — resilience:");
   await fs.writeFile(pb, await bad.generateAsync({ type: "nodebuffer" }));
   let err = null;
   try { await buildPackage({ inputPath: pb }); } catch (e) { err = e; }
-  check("unreadable export → explicit error", err !== null && /Teach on Mars/.test(err.message));
+  check("unreadable export → explicit error", err !== null && /Mobile-learning Excel export/.test(err.message));
 
   // an html file alongside xlsx → NOT treated as TOM (html wins)
   const mix = new JSZip();
