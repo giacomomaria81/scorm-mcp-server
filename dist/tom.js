@@ -556,30 +556,46 @@ export function renderTomCourseHtml(course, mediaIndex) {
       banner.classList.add("on");
     }
   }
+  var quizOpenedAt = (new Date()).getTime();
   for (var j = 0; j < quizzes.length; j++) {
-    (function (quiz) {
+    (function (quiz, qNumber) {
       var buttons = quiz.querySelectorAll("[data-answer]");
+      function answerText(btn) { return (btn.textContent || "").replace(/\\s+/g, " ").trim(); }
       function lock(chosen) {
         var isCorrect = chosen.getAttribute("data-correct") === "1";
         if (isCorrect) { correct++; }
         answered++;
         quiz.setAttribute("data-done", isCorrect ? "correct" : "incorrect");
+        var correctBtn = null;
         for (var b = 0; b < buttons.length; b++) {
           buttons[b].disabled = true;
-          if (buttons[b].getAttribute("data-correct") === "1") { buttons[b].classList.add("ok"); }
+          if (buttons[b].getAttribute("data-correct") === "1") { buttons[b].classList.add("ok"); correctBtn = buttons[b]; }
           else if (buttons[b] === chosen) { buttons[b].classList.add("ko"); }
         }
         var corr = quiz.querySelector(".correction");
         if (corr && corr.innerHTML.trim() !== "") { corr.hidden = false; }
         var section = quiz.closest("section");
         var a = api();
+        // question-level tracking (v2.3): one cmi.interactions entry per answer
+        if (a && a.interaction) {
+          var qEl = quiz.querySelector(".question");
+          a.interaction({
+            id: (section ? section.id + "-" : "") + "q" + qNumber,
+            type: "choice",
+            description: qEl ? (qEl.textContent || "").replace(/\\s+/g, " ").trim() : undefined,
+            learnerResponse: answerText(chosen),
+            correctResponse: correctBtn ? answerText(correctBtn) : undefined,
+            result: isCorrect,
+            latencyMs: (new Date()).getTime() - quizOpenedAt
+          });
+        }
         if (section && a && a.reach && sectionDone(section)) { a.reach(section.id); }
         if (answered === total) { onAllAnswered(); }
       }
       for (var b = 0; b < buttons.length; b++) {
         buttons[b].addEventListener("click", function (ev) { lock(ev.currentTarget); });
       }
-    })(quizzes[j]);
+    })(quizzes[j], j + 1);
   }
 
   if (api()) { declareQuizMilestones(); }

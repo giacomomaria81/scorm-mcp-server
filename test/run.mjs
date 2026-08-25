@@ -2,8 +2,9 @@ import { buildPackage } from "../dist/converter.js";
 import JSZip from "jszip";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const res = await buildPackage({
   inputPath: path.join(here, "sample-module.html"),

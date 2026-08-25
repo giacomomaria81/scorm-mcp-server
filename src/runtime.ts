@@ -35,6 +35,7 @@ export const SCORM_RUNTIME = `
   // package works in both worlds; only the manifest differs between versions.
   var api = null, dialect = null, initialized = false, terminated = false, previewMode = false, successOnComplete = false;
   var masteryScore = null, lastScaled = null, lastScore = null;
+  var pendingInteractions = [], interactionCount = 0, interactionsInited = false;
   try { if (typeof window.__SCORM_MASTERY === "number" && window.__SCORM_MASTERY >= 0 && window.__SCORM_MASTERY <= 1) { masteryScore = window.__SCORM_MASTERY; } } catch (e) {}
   var milestoneIds = [], reached = {}, reachedCount = 0, lastProgress = 0, completed = false;
   var startTime = 0, commitTimer = null, lastCommit = 0;
@@ -216,6 +217,82 @@ export const SCORM_RUNTIME = `
     scheduleCommit();
   }
 
+  // ---- question-level tracking: cmi.interactions (v2.3) ---------------------
+  // Best-effort by design: interactions are OPTIONAL data. Every write goes
+  // through a guarded setter, so an LMS that rejects them (some 1.2 players)
+  // logs the refusal and the session carries on untouched.
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  function interactionTimestamp() {
+    var d = new Date();
+    if (dialect === "12") { return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds()); }
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) +
+      "T" + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+  function interactionLatency(ms) {
+    ms = Number(ms);
+    if (!isFinite(ms) || ms < 0) { return null; }
+    var s = Math.floor(ms / 1000);
+    if (dialect === "12") {
+      return pad2(Math.floor(s / 3600)) + ":" + pad2(Math.floor((s % 3600) / 60)) + ":" + pad2(s % 60);
+    }
+    return "PT" + s + "S";
+  }
+  function interactionId(raw) {
+    var id = String(raw == null ? "" : raw).replace(/[^A-Za-z0-9_.:\-]/g, "_").slice(0, 240);
+    return id || ("interaction-" + interactionCount);
+  }
+  function setRaw(el, v) {
+    // Direct dialect write (element names are already dialect-correct here).
+    try {
+      var ok = apiSet(el, String(v));
+      if (ok === "true" || ok === true) { return true; }
+      log("SetValue refused: " + el + " (LMS error " + apiLastError() + ")");
+    } catch (e) { log("SetValue error: " + el); }
+    return false;
+  }
+  function reportInteraction(spec) {
+    if (!spec || typeof spec !== "object") { return; }
+    if (!interactionsInited) {
+      interactionsInited = true;
+      try {
+        var c = Number(apiGet("cmi.interactions._count"));
+        if (isFinite(c) && c > 0) { interactionCount = c; }
+      } catch (e) { /* keep 0 */ }
+    }
+    var i = interactionCount++;
+    var p = "cmi.interactions." + i + ".";
+    var type = typeof spec.type === "string" && spec.type ? spec.type : "choice";
+    var result = spec.result === true ? "correct"
+      : spec.result === false ? "incorrect"
+      : (typeof spec.result === "string" ? spec.result : null);
+    setRaw(p + "id", interactionId(spec.id));
+    setRaw(p + "type", type);
+    if (dialect === "12") {
+      if (spec.learnerResponse != null) { setRaw(p + "student_response", String(spec.learnerResponse).slice(0, 255)); }
+      if (spec.correctResponse != null) { setRaw(p + "correct_responses.0.pattern", String(spec.correctResponse).slice(0, 255)); }
+      if (result) { setRaw(p + "result", result === "incorrect" ? "wrong" : result); }
+      setRaw(p + "time", interactionTimestamp());
+    } else {
+      if (spec.learnerResponse != null) { setRaw(p + "learner_response", String(spec.learnerResponse).slice(0, 4000)); }
+      if (spec.correctResponse != null) { setRaw(p + "correct_responses.0.pattern", String(spec.correctResponse).slice(0, 4000)); }
+      if (result) { setRaw(p + "result", result); }
+      if (spec.description != null) { setRaw(p + "description", String(spec.description).slice(0, 250)); }
+      setRaw(p + "timestamp", interactionTimestamp());
+    }
+    var lat = interactionLatency(spec.latencyMs);
+    if (lat) { setRaw(p + "latency", lat); }
+    if (typeof spec.weighting === "number" && isFinite(spec.weighting)) { setRaw(p + "weighting", String(spec.weighting)); }
+    log("interaction reported: #" + i + " " + interactionId(spec.id) + (result ? " (" + result + ")" : ""));
+    scheduleCommit();
+  }
+  function interaction(spec) {
+    // Fired before Initialize: memorise and replay once the session is open.
+    if (previewMode) { return; }
+    if (!initialized || !api) { if (spec && typeof spec === "object") { pendingInteractions.push(spec); } return; }
+    reportInteraction(spec);
+  }
+  function onInteractionEvent(e) { try { interaction((e && e.detail) || null); } catch (err) {} }
+
   // ---- event contract (v2): scorm:progress / scorm:complete / scorm:score ---
   // (dc:* aliases accepted). Any app can emit CustomEvents without knowing SCORM.
   function onProgressEvent(e) {
@@ -234,7 +311,8 @@ export const SCORM_RUNTIME = `
   function wireEventContract() {
     var pairs = [["scorm:progress", onProgressEvent], ["dc:progress", onProgressEvent],
                  ["scorm:complete", onCompleteEvent], ["dc:complete", onCompleteEvent],
-                 ["scorm:score", onScoreEvent], ["dc:score", onScoreEvent]];
+                 ["scorm:score", onScoreEvent], ["dc:score", onScoreEvent],
+                 ["scorm:interaction", onInteractionEvent], ["dc:interaction", onInteractionEvent]];
     for (var i = 0; i < pairs.length; i++) {
       try { window.addEventListener(pairs[i][0], pairs[i][1]); } catch (e) {}
       try { document.addEventListener(pairs[i][0], pairs[i][1]); } catch (e) {}
@@ -361,6 +439,7 @@ export const SCORM_RUNTIME = `
     if (completed) { set("cmi.completion_status", "completed"); if (successOnComplete) { set("cmi.success_status", "passed"); } }
     if (lastScore) { reportScore(lastScore.raw, lastScore.min, lastScore.max); }
     if (lastProgress > 0) { set("cmi.progress_measure", formatMeasure(lastProgress)); }
+    while (pendingInteractions.length) { reportInteraction(pendingInteractions.shift()); }
     wireTriggers();
     watchDynamicMilestones();
     doCommit();
@@ -401,6 +480,7 @@ export const SCORM_RUNTIME = `
     reach: function (id) { reach(id); },
     declare: function (id) { declare(id); },
     score: function (raw, min, max) { reportScore(raw, min, max); },
+    interaction: function (spec) { interaction(spec); },
     complete: function () { markCompleted(); persist(); },
     progress: function () { return lastProgress; },
     isPreview: function () { return previewMode; }

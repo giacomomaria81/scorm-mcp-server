@@ -2,10 +2,12 @@
 /**
  * scorm-mcp-server
  *
- * Exposes a single tool, `scorm_package`, that converts a self-contained HTML
- * document (e.g. the HTML produced by Claude Design) into a SCORM 2004 4th
- * Edition package: assets inlined for offline use, a milestone runtime injected
- * for completion + progress tracking, and everything zipped into a valid PIF.
+ * Exposes three tools: `scorm_package` converts a self-contained HTML document
+ * (e.g. the HTML produced by Claude Design) or a mobile-learning export into a
+ * SCORM 2004 / 1.2 package (assets inlined for offline use, a milestone runtime
+ * injected for completion + progress + interactions tracking, everything zipped
+ * into a valid PIF); `scorm_validate` conformance-checks ANY existing SCORM
+ * zip and explains import failures; `scorm_selftest` is a 1-second diagnostic.
  *
  * Transport: stdio (for local use inside Claude Desktop / Claude Code).
  *
@@ -24,7 +26,7 @@ import { buildPackage } from "./converter.js";
 // Public library API: lets pipelines/backends do
 //   import { buildPackage } from "scorm-mcp-server";
 export { buildPackage } from "./converter.js";
-const SERVER_VERSION = "2.2.1";
+const SERVER_VERSION = "2.3.0";
 const server = new McpServer({
     name: "scorm-mcp-server",
     version: SERVER_VERSION,
@@ -304,6 +306,55 @@ async function packBatch(params, outDir) {
     return report;
 }
 // --------------------------------------------------------------------------
+// scorm_validate: standalone conformance check of ANY existing SCORM zip
+// --------------------------------------------------------------------------
+server.registerTool("scorm_validate", {
+    title: "Validate an existing SCORM package",
+    description: `Check whether an EXISTING SCORM .zip (made by this tool or by ANY other authoring tool) is conformant and will import into an LMS — and if not, explain exactly why.
+
+Use this when an LMS rejects a package, before uploading a package to production, or to audit a batch of courses received from a vendor. The input is never modified.
+
+Checks performed:
+  - the archive is a readable zip with imsmanifest.xml at its ROOT (detects the classic "zipped the folder instead of its contents" mistake and says how to fix it)
+  - the manifest is well-formed XML and the SCORM edition is identified (2004 or 1.2)
+  - an <organization> with a launchable <item> exists, resolving to a scormType="sco" <resource> with an href
+  - the launch file and every <file href> listed in the manifest actually exist in the archive (case-only mismatches are flagged: they work on Windows but fail on the Linux servers most LMSs run on)
+  - the manifest validates against the official ADL XSD schemas (XSDs bundled in the package are used first; missing ones are supplied from the copies embedded in this tool, so packages that ship without schemas can still be validated). Requires xmllint; skipped with a warning otherwise.
+
+Args:
+  - input_path (string, required): path to the .zip to validate.
+
+Returns JSON: { ok, scorm_version, title, entry_href, files_in_zip, checks: [{id, label, ok, detail}], errors, warnings, schema_validation }`,
+    inputSchema: {
+        input_path: z.string().describe("Path to the SCORM .zip file to validate."),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+}, async (params) => {
+    try {
+        const { validatePackage, formatReport } = await import("./validate.js");
+        const r = await validatePackage({ zipPath: params.input_path });
+        const output = {
+            ok: r.ok,
+            scorm_version: r.scormVersion,
+            title: r.title,
+            entry_href: r.entryHref,
+            files_in_zip: r.filesInZip,
+            checks: r.checks,
+            errors: r.errors,
+            warnings: r.warnings,
+            schema_validation: r.schemaValidation,
+        };
+        return {
+            content: [{ type: "text", text: formatReport(r) }],
+            structuredContent: output,
+        };
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: "Validation could not run: " + msg }], isError: true };
+    }
+});
+// --------------------------------------------------------------------------
 // scorm_selftest: instant "is the server alive and sane?" diagnostic
 // --------------------------------------------------------------------------
 const SELFTEST_HTML = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Selftest</title></head>" +
@@ -350,6 +401,7 @@ Usage:
   scorm-mcp-server                      start the MCP server (stdio)
   scorm-mcp-server ui [--port 3117]     open the local drag & drop web UI
   scorm-mcp-server pack <input> [opts]  package a file/folder/zip from the CLI
+  scorm-mcp-server validate <file.zip>  check an existing SCORM package (any tool's) and explain failures
   scorm-mcp-server selftest             build a constant test package
 
 Inputs: a self-contained .html, a folder or .zip bundle, a Claude Design .dc
@@ -387,6 +439,23 @@ export async function runCli(argv) {
         }
         catch { /* user can click the printed URL */ }
         return new Promise(() => { }); // serve until Ctrl-C
+    }
+    if (cmd === "validate") {
+        const target = args.find((a) => !a.startsWith("--"));
+        if (!target) {
+            console.error("validate: missing <file.zip>\n");
+            console.log(CLI_HELP);
+            return 1;
+        }
+        const { validatePackage, formatReport } = await import("./validate.js");
+        const r = await validatePackage({ zipPath: target });
+        if (args.includes("--json")) {
+            console.log(JSON.stringify(r, null, 2));
+        }
+        else {
+            console.log(formatReport(r));
+        }
+        return r.ok ? 0 : 1;
     }
     if (cmd === "selftest") {
         const t0 = Date.now();
@@ -453,7 +522,7 @@ export async function runCli(argv) {
 }
 async function main() {
     const sub = process.argv[2];
-    if (sub === "pack" || sub === "selftest" || sub === "ui" || sub === "--help" || sub === "-h") {
+    if (sub === "pack" || sub === "validate" || sub === "selftest" || sub === "ui" || sub === "--help" || sub === "-h") {
         process.exit(await runCli(process.argv.slice(2)));
     }
     const transport = new StdioServerTransport();

@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.giacomomaria81/scorm-mcp-server",
   "title": "SCORM Packager (HTML → SCORM 2004)",
-  "description": "Turn HTML, Claude Design bundles or mobile-learning exports into SCORM 2004/1.2 packages.",
-  "version": "2.2.1",
+  "description": "Turn HTML, Claude Design bundles or mobile-learning exports into SCORM 2004/1.2 packages — and validate any existing SCORM zip.",
+  "version": "2.3.0",
   "websiteUrl": "https://github.com/giacomomaria81/scorm-mcp-server#readme",
   "repository": {
     "url": "https://github.com/giacomomaria81/scorm-mcp-server",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "scorm-mcp-server",
-      "version": "2.2.1",
+      "version": "2.3.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -31,9 +31,9 @@
     },
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/giacomomaria81/scorm-mcp-server/releases/download/v2.2.1/scorm-mcp-server-2.2.1.mcpb",
-      "version": "2.2.1",
-      "fileSha256": "dcf74488a55651b1ceabe8116de249a6f3ea7b921b3408017106d6309d088ecd",
+      "identifier": "https://github.com/giacomomaria81/scorm-mcp-server/releases/download/v2.3.0/scorm-mcp-server-2.3.0.mcpb",
+      "version": "2.3.0",
+      "fileSha256": "c747444653d8bd293d46fab8d6e2bb702a0c5567647fc95a68b6b52001be281c",
       "transport": {
         "type": "stdio"
       }

@@ -7,8 +7,9 @@
 import { buildPackage } from "../dist/converter.js";
 import JSZip from "jszip";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 let pass = 0, fail = 0;
 const check = (label, cond) => { if (cond) { pass++; console.log("  ✔ " + label); } else { fail++; console.log("  ✗ FAIL: " + label); } };

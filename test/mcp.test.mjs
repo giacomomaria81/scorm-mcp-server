@@ -26,7 +26,8 @@ try {
   console.log("Connected to server (handshake OK).");
 
   const { tools } = await client.listTools();
-  check("server exposes exactly 2 tools (package + selftest)", tools.length === 2);
+  check("server exposes exactly 3 tools (package + validate + selftest)", tools.length === 3);
+  check("scorm_validate present", tools.some((t) => t.name === "scorm_validate"));
   const pkg = tools.find((t) => t.name === "scorm_package");
   check("scorm_package present", Boolean(pkg));
   check("scorm_selftest present", tools.some((t) => t.name === "scorm_selftest"));

@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const pexec = promisify(execFile);
 let pass = 0, fail = 0;
@@ -15,7 +16,7 @@ const check = (label, cond) => {
   else { fail++; console.log("  ✗ FAIL: " + label); }
 };
 
-const ENTRY = new URL("../dist/index.js", import.meta.url).pathname;
+const ENTRY = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const HTML = "<!DOCTYPE html><html><head><title>C</title></head><body><section><h2>A</h2><p>x</p></section></body></html>";
 
 console.log("1 — selftest:");
